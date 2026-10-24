@@ -1,0 +1,8 @@
+# Batch keyword list: every line becomes one keyword in a single job and one CSV.
+# One keyword per line. Blank lines and lines starting with # are ignored.
+# Bake the location into each line, or pass --city to geocode one place for all of them.
+# Run:  python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
+dentists in Denver CO
+orthodontists in Denver CO
+dental hygienists in Denver CO
+pediatric dentists in Denver CO
