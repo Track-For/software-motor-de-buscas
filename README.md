@@ -1,5 +1,7 @@
 # Google Maps Scraper Kit
 
+> **Painel Prospecta (pt-BR):** esta versão inclui um CRM local com funil, agenda de retornos, exclusão individual/em lote e backups. No Windows, abra o Docker Desktop e execute **Iniciar.bat**. Veja o [guia do painel](painel/README.md) para uso, atualização e recuperação de dados. A documentação original do kit segue abaixo.
+
 <p align="center">
   <img src="assets/banner.svg" alt="Google Maps Scraper Kit: free local Google Maps scraper for lead generation, driven by Claude Code" width="100%">
 </p>

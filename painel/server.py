@@ -6,23 +6,25 @@ motor (docker compose) em http://localhost:8080. As buscas rodam UMA DE CADA VEZ
 de propósito: buscas paralelas contra o Google aumentam a chance de bloqueio.
 
 Dados (tudo local, em painel/dados/):
-  leads.json       base única de leads (CRM), chave = place_id do Google
-  buscas/<id>.json cada busca, com os ids dos leads que ela trouxe
-  config.json      modelos de mensagem do WhatsApp
+  prospecta.sqlite3  leads, buscas, mensagens e exclusões
+  backups/          cópias completas para restauração
+  JSONs legados são importados e preservados na primeira abertura.
 
     python3 painel/server.py
 """
 import csv, hashlib, io, json, os, re, socket, sys, threading, time, unicodedata
 import urllib.error, urllib.parse, urllib.request, uuid, webbrowser
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from storage import Store, read_json, write_json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, os.pardir, "scripts"))
 import scrape as kit  # noqa: E402  (reaproveita req, grid, dedupe, extração de email/redes)
 
 PORT = int(os.environ.get("PAINEL_PORT", "8090"))
-DADOS = os.path.join(HERE, "dados")
+DADOS = os.environ.get("PAINEL_DATA_DIR") or os.path.join(HERE, "dados")
 DIR_BUSCAS = os.path.join(DADOS, "buscas")
 ARQ_LEADS = os.path.join(DADOS, "leads.json")
 ARQ_CONFIG = os.path.join(DADOS, "config.json")
@@ -60,35 +62,72 @@ leads = {}           # id -> lead
 config = {}
 fila = []            # ids de buscas aguardando
 fila_cond = threading.Condition(lock)
+store = None
+excluidos = {}  # evita que uma busca em andamento recrie um lead excluído
 
 
 # ── Persistência ────────────────────────────────────────────────────────────────
 def _grava(caminho, obj):
-    tmp = caminho + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False)
-    os.replace(tmp, caminho)
+    write_json(caminho, obj)
+
+def persistir():
+    with lock:
+        if store:
+            try:
+                store.sync({"leads": leads, "buscas": buscas, "config": {"principal": config}, "excluidos": excluidos})
+            except (OSError, sqlite3.DatabaseError):
+                # Não deixar uma operação recusada reaparecer na próxima gravação.
+                for target, kind in ((leads, "leads"), (buscas, "buscas"), (excluidos, "excluidos")):
+                    saved = store.read(kind)
+                    for key in list(target):
+                        if key not in saved:
+                            del target[key]
+                    for key, value in saved.items():
+                        if isinstance(target.get(key), dict) and isinstance(value, dict):
+                            target[key].clear(); target[key].update(value)
+                        else:
+                            target[key] = value
+                config.clear(); config.update(store.read("config").get("principal", {}))
+                raise
+
+def snapshot():
+    return json.loads(json.dumps({"versao": 1, "criado_em": time.time(), "leads": leads,
+                                 "buscas": buscas, "config": config, "excluidos": excluidos}))
+
+def backup(motivo="automatico"):
+    with lock:
+        pasta = os.path.join(DADOS, "backups")
+        os.makedirs(pasta, exist_ok=True)
+        nome = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6] + "-" + motivo + ".json"
+        _grava(os.path.join(pasta, nome), snapshot())
+        return nome
 
 def salvar_busca(b):
     with lock:
-        _grava(os.path.join(DIR_BUSCAS, f"{b['id']}.json"), b)
+        if b['id'] in buscas:
+            persistir()
 
 def salvar_leads():
-    with lock:
-        _grava(ARQ_LEADS, leads)
+    persistir()
 
 def salvar_config():
-    with lock:
-        _grava(ARQ_CONFIG, config)
+    persistir()
 
 def _le(caminho, padrao):
-    try:
-        with open(caminho, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return padrao
+    return read_json(caminho, padrao)
 
 def carregar():
+    global store
+    db_path = os.path.join(DADOS, "prospecta.sqlite3")
+    store = Store(db_path)
+    if store.read("config"):
+        leads.update(store.read("leads"))
+        buscas.update(store.read("buscas"))
+        config.update(store.read("config")["principal"])
+        excluidos.update(store.read("excluidos"))
+        retomar()
+        backup()
+        return
     leads.update(_le(ARQ_LEADS, {}))
     config.update(_le(ARQ_CONFIG, None) or json.loads(json.dumps(CONFIG_PADRAO)))
     for nome in os.listdir(DIR_BUSCAS):
@@ -107,14 +146,96 @@ def carregar():
         antigos = b.pop("leads", None) or []
         b["lead_ids"] = mesclar_leads(b, antigos)
         buscas[b["id"]] = b
-        salvar_busca(b)
-        os.remove(caminho)
+        # O original da migração fica intacto para recuperação manual.
+    backup("migracao")
+    retomar()
+    persistir()
+
+def retomar():
     for b in buscas.values():
         if b.get("estado") in ("na_fila", "rodando"):  # servidor caiu no meio: recoloca na fila
-            b["estado"], b["etapa"] = "na_fila", "Aguardando (retomada após reinício)"
+            if b.get("cancelar") and not b.get("job_atual"):
+                b["estado"], b["etapa"] = "cancelada", "Cancelada"
+                continue
+            b["estado"], b["etapa"] = "na_fila", "Retomando do último ponto salvo"
             fila.append(b["id"])
     fila.sort(key=lambda i: buscas[i]["criado_em"])
-    salvar_leads()
+    persistir()
+
+def excluir_leads(ids, salvar=True):
+    with lock:
+        ids = set(ids) & leads.keys()
+        if not ids:
+            return 0
+        if salvar:
+            backup("antes-exclusao")
+        for lid in ids:
+            excluidos[lid] = time.time()
+            del leads[lid]
+        for b in buscas.values():
+            b["lead_ids"] = [i for i in b.get("lead_ids", []) if i not in ids]
+            b["linhas_parciais"] = [r for r in b.get("linhas_parciais", []) if id_lead(r) not in ids]
+            for lid in ids:
+                b.get("enriquecidos", {}).pop(lid, None)
+        if salvar:
+            persistir()
+        return len(ids)
+
+def restaurar(d):
+    if not isinstance(d, dict) or d.get("versao") != 1:
+        raise ValueError("Formato de backup inválido.")
+    for key in ("leads", "buscas", "config", "excluidos"):
+        if not isinstance(d.get(key), dict):
+            raise ValueError("Backup incompleto: " + key)
+    for lid, l in d["leads"].items():
+        if not isinstance(l, dict) or l.get("id") != lid or l.get("status") not in STATUS_LEAD:
+            raise ValueError("Lead inválido no backup.")
+        if not all(k in l for k in (*CAMPOS_CONTATO, "buscas", "historico", "criado_em", "atualizado_em")):
+            raise ValueError("Lead incompleto no backup.")
+        if not isinstance(l["historico"], list) or not isinstance(l["buscas"], list):
+            raise ValueError("Histórico inválido.")
+        if not all(isinstance(v, str) for v in l["buscas"]):
+            raise ValueError("Vínculos inválidos.")
+        for key in ("nome", "categoria", "telefone", "email", "site", "cidade", "uf"):
+            if not isinstance(l[key], str):
+                raise ValueError("Campo de lead inválido: " + key)
+        for key in ("nota", "avaliacoes", "criado_em", "atualizado_em"):
+            if not isinstance(l[key], (int, float)) or not 0 <= l[key] < 1e15:
+                raise ValueError("Valor numérico inválido: " + key)
+        if l.get("retorno") is not None and (not isinstance(l["retorno"], (int, float)) or not 0 < l["retorno"] < 32503680000):
+            raise ValueError("Data de retorno inválida no backup.")
+        for ev in l["historico"]:
+            if not isinstance(ev, dict) or not isinstance(ev.get("t"), (int, float)) or not 0 <= ev["t"] < 32503680000 or not all(isinstance(ev.get(k), str) for k in ("tipo", "txt")):
+                raise ValueError("Evento inválido no backup.")
+    for bid, b in d["buscas"].items():
+        if not isinstance(b, dict) or b.get("id") != bid or not isinstance(b.get("parametros"), dict):
+            raise ValueError("Busca inválida no backup.")
+        if not all(k in b for k in ("estado", "criado_em", "lead_ids")):
+            raise ValueError("Busca incompleta no backup.")
+        p = b["parametros"]
+        if b["estado"] not in ("rodando", "na_fila", "concluida", "cancelada", "erro") or not isinstance(b["criado_em"], (int, float)):
+            raise ValueError("Estado da busca inválido.")
+        if not isinstance(b["lead_ids"], list) or not all(isinstance(i, str) and i in d["leads"] for i in b["lead_ids"]):
+            raise ValueError("Vínculos de busca inválidos.")
+        if p.get("tamanho") not in TAMANHOS or not all(isinstance(p.get(k), str) for k in ("cidade", "uf")) or not isinstance(p.get("nichos"), list) or not p["nichos"] or not all(isinstance(n, str) for n in p["nichos"]):
+            raise ValueError("Parâmetros de busca inválidos.")
+    tpls = d["config"].get("templates")
+    if not isinstance(tpls, list) or not tpls or any(not isinstance(t, dict) or not all(isinstance(t.get(k), str) for k in ("id", "nome", "texto")) for t in tpls):
+        raise ValueError("Modelos inválidos no backup.")
+    with lock:
+        if any(b["estado"] in ("rodando", "na_fila") for b in buscas.values()):
+            raise ValueError("Aguarde ou cancele as buscas antes de restaurar.")
+        backup("antes-restauracao")
+        for b in d["buscas"].values():
+            if b["estado"] in ("rodando", "na_fila"):
+                b.update(estado="cancelada", etapa="Restaurada de backup; repita a busca para continuar.", cancelar=True)
+        # Uma única transação substitui todas as coleções.
+        store.sync({"leads": d["leads"], "buscas": d["buscas"], "config": {"principal": d["config"]}, "excluidos": d["excluidos"]})
+        leads.clear(); leads.update(d["leads"])
+        buscas.clear(); buscas.update(d["buscas"])
+        config.clear(); config.update(d["config"])
+        excluidos.clear(); excluidos.update(d["excluidos"])
+        fila.clear()
 
 
 # ── Geografia ──────────────────────────────────────────────────────────────────
@@ -268,6 +389,8 @@ def mesclar_leads(busca, novos):
     with lock:
         for n in novos:
             lid = n.get("id") or id_lead({"place_id": n.get("place_id"), "title": n.get("nome"), "address": n.get("endereco")})
+            if lid in excluidos:
+                continue
             atual = leads.get(lid)
             if atual:
                 for k in CAMPOS_CONTATO:
@@ -275,6 +398,7 @@ def mesclar_leads(busca, novos):
                         atual[k] = n[k]
                 if busca["id"] not in atual["buscas"]:
                     atual["buscas"].append(busca["id"])
+                atual["atualizado_em"] = agora
             else:
                 lead = {k: n.get(k, "") for k in CAMPOS_CONTATO}
                 lead.update(id=lid, status=n.get("status") or "novo", obs=n.get("obs", ""),
@@ -349,22 +473,33 @@ def atualizar(b, **kw):
         b["atualizado_em"] = time.time()
 
 def rodar_job(b, corpo, rotulo):
-    _, raw = kit.req("POST", "/api/v1/jobs", corpo)
-    jid = json.loads(raw).get("id")
+    jid = b.get("job_atual")
     if not jid:
-        raise RuntimeError("O motor não devolveu id do job.")
-    with lock:
-        b["jobs_motor"].append(jid)
-    inicio = time.time()
-    while True:
         if b.get("cancelar"):
             raise Cancelada()
+        _, raw = kit.req("POST", "/api/v1/jobs", corpo)
+        jid = json.loads(raw).get("id")
+        if not jid:
+            raise RuntimeError("O motor não devolveu id do job.")
+        with lock:
+            b["jobs_motor"].append(jid)
+            b["job_atual"], b["job_inicio"] = jid, time.time()
+            salvar_busca(b)
+    inicio = b.get("job_inicio", time.time())
+    while True:
         _, raw = kit.req("GET", f"/api/v1/jobs/{jid}")
         st = json.loads(raw).get("Status")
-        atualizar(b, etapa=f"{rotulo} — {int(time.time() - inicio)}s")
+        atualizar(b, etapa=("Cancelamento solicitado — aguardando o motor terminar a região atual" if b.get("cancelar")
+                            else f"{rotulo} — {int(time.time() - inicio)}s"))
+        if b.get("cancelar") and st in ("ok", "failed"):
+            b.pop("job_atual", None)
+            salvar_busca(b)
+            raise Cancelada()
         if st == "ok":
             break
         if st == "failed":
+            b.pop("job_atual", None)
+            salvar_busca(b)
             raise RuntimeError("O Google recusou a busca (possível bloqueio temporário). Espere alguns minutos.")
         if time.time() - inicio > corpo["max_time"] + 300:
             raise RuntimeError("Tempo esgotado esperando o motor.")
@@ -376,10 +511,12 @@ def executar(b):
     p = b["parametros"]
     t = TAMANHOS[p["tamanho"]]
     atualizar(b, estado="rodando", etapa="Localizando a cidade no mapa…", iniciado_em=time.time(), parcial=0)
-    geo = localizar(p["cidade"], p["uf"], p.get("bairro"))
+    geo = b.get("geo") or localizar(p["cidade"], p["uf"], p.get("bairro"))
     if not geo:
         raise RuntimeError(f"Não encontrei \"{p['cidade']} - {p['uf']}\" no mapa.")
     lat, lon, bbox = geo
+    b["geo"] = geo
+    salvar_busca(b)
     onde = f"{p['bairro']}, {p['cidade']} - {p['uf']}" if p.get("bairro") else f"{p['cidade']} - {p['uf']}"
     corpo = {"name": f"painel:{b['id'][:8]}", "keywords": [f"{n} em {onde}" for n in p["nichos"]],
              "lang": "pt", "zoom": 15, "lat": str(lat), "lon": str(lon), "fast_mode": False,
@@ -387,8 +524,13 @@ def executar(b):
              "depth": t["depth"], "email": True, "max_time": t["max_time"]}
     usa_grid = t["grid"] and bbox and not p.get("bairro")
     celulas = kit.grid_cells(bbox, t["grid"]) if usa_grid else [None]
-    linhas = []
+    linhas = b.get("linhas_parciais", [])
+    concluidas = b.setdefault("regioes_concluidas", [])
     for i, cel in enumerate(celulas, 1):
+        if i in concluidas:
+            continue
+        if b.get("cancelar") and not b.get("job_atual"):
+            raise Cancelada()
         rotulo = (f"Buscando no Google Maps — região {i}/{len(celulas)}" if len(celulas) > 1
                   else "Buscando no Google Maps")
         atualizar(b, progresso={"atual": i - 1, "total": len(celulas), "fase": "maps"})
@@ -401,28 +543,54 @@ def executar(b):
                 raise
             with lock:
                 b["avisos"].append(f"Região {i} pulada: {e}")
+            if b.get("job_atual"):
+                raise
             continue
-        linhas = kit.dedupe(linhas + novas)
-        atualizar(b, parcial=len(linhas))
+        with lock:
+            linhas = [r for r in kit.dedupe(linhas + novas) if id_lead(r) not in excluidos]
+            concluidas.append(i)
+            b.pop("job_atual", None)
+            atualizar(b, parcial=len(linhas), linhas_parciais=linhas)
+            parciais = [lead_de(r) for r in linhas if not usa_grid or kit.in_bbox(r, bbox)]
+            novos_ids = b.setdefault("novos_ids", [])
+            novos_ids.extend(l["id"] for l in parciais if l["id"] not in leads and l["id"] not in novos_ids)
+            b["lead_ids"] = mesclar_leads(b, parciais)
+            salvar_busca(b)
     if usa_grid:
         linhas = [r for r in linhas if kit.in_bbox(r, bbox)]
     novos = [lead_de(r) for r in linhas]
 
-    com_site = [l for l in novos if l["site"]]
+    enriquecidos = b.setdefault("enriquecidos", {})
+    for l in novos:
+        if l["id"] in enriquecidos:
+            l.update(enriquecidos[l["id"]])
+    com_site = [l for l in novos if l["site"] and l["id"] not in enriquecidos and l["id"] not in excluidos]
     feitos = 0
     atualizar(b, etapa=f"Visitando sites atrás de e-mail e WhatsApp — 0/{len(com_site)}",
               progresso={"atual": 0, "total": len(com_site), "fase": "sites"})
     with ThreadPoolExecutor(max_workers=8) as ex:
-        for _ in ex.map(lambda l: enriquecer(l, p.get("redes", True)), com_site):
+        def enriquecer_um(l):
+            if not b.get("cancelar"):
+                enriquecer(l, p.get("redes", True))
+            return l
+        for l in ex.map(enriquecer_um, com_site):
             feitos += 1
             if b.get("cancelar"):
                 raise Cancelada()
             atualizar(b, etapa=f"Visitando sites atrás de e-mail e WhatsApp — {feitos}/{len(com_site)}",
                       progresso={"atual": feitos, "total": len(com_site), "fase": "sites"})
+            with lock:
+                if l["id"] not in excluidos:
+                    enriquecidos[l["id"]] = l
+                    mesclar_leads(b, [l])
+                salvar_busca(b)
+    if b.get("cancelar"):
+        raise Cancelada()
     ids = mesclar_leads(b, novos)
-    ja_tinha = sum(1 for i in ids if len(leads[i]["buscas"]) > 1)
-    atualizar(b, lead_ids=ids, novos=len(ids) - ja_tinha, estado="concluida", etapa="Concluída",
+    atualizar(b, lead_ids=ids, novos=len(set(ids) & set(b.get("novos_ids", []))), estado="concluida", etapa="Concluída",
               concluido_em=time.time(), progresso=None)
+    b.pop("linhas_parciais", None)
+    b.pop("enriquecidos", None)
     salvar_leads()
 
 def trabalhador():
@@ -432,7 +600,7 @@ def trabalhador():
                 fila_cond.wait()
             bid = fila.pop(0)
             b = buscas.get(bid)
-        if not b or b.get("cancelar"):
+        if not b or (b.get("cancelar") and not b.get("job_atual")):
             continue
         try:
             executar(b)
@@ -446,6 +614,11 @@ def trabalhador():
                       etapa=f"Motor fora do ar ({e.reason}). Abra o Docker e rode: docker compose up -d")
         except Exception as e:
             atualizar(b, estado="erro", etapa=str(e), progresso=None)
+        if b.get("job_atual") and b["estado"] == "erro":
+            atualizar(b, estado="na_fila", etapa="Aguardando reconexão com o motor; nenhuma outra busca será iniciada.")
+            with fila_cond:
+                fila.insert(0, b["id"])
+            time.sleep(10)
         salvar_busca(b)
 
 
@@ -489,7 +662,10 @@ def painel_inicio():
             "com_email": sum(1 for l in ls if l["email"]),
             "sem_site": sum(1 for l in ls if not l["site"]),
             "por_status": por_status,
-            "contatos_semana": sum(1 for e in eventos if e["t"] >= semana and e["tipo"] == "whatsapp"),
+            "contatos_semana": sum(1 for e in eventos if e["t"] >= semana and e["tipo"] in ("whatsapp", "ligacao", "email")),
+            "contatos_dia": [sum(1 for e in eventos if e["tipo"] in ("whatsapp", "ligacao", "email")
+                                 and time.strftime("%Y-%m-%d", time.localtime(e["t"])) == time.strftime("%Y-%m-%d", time.localtime(time.time() - dia * 86400)))
+                             for dia in range(6, -1, -1)],
             "novos_semana": sum(1 for l in ls if l["criado_em"] >= semana),
             "cidades": top("cidade"), "bairros": top("bairro"), "categorias": top("categoria"),
             "eventos": eventos[:12],
@@ -500,7 +676,7 @@ def registrar(l, tipo, txt):
     agora = time.time()
     l.setdefault("historico", []).append({"t": agora, "tipo": tipo, "txt": txt})
     l["atualizado_em"] = agora
-    if tipo == "whatsapp":
+    if tipo in ("whatsapp", "ligacao", "email"):
         l["ultimo_contato"] = agora
 
 def motor_ok():
@@ -527,13 +703,24 @@ class H(BaseHTTPRequestHandler):
 
     def _corpo(self):
         n = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(n) or b"{}")
+        if n < 0 or n > 50 * 1024 * 1024:
+            raise ValueError("Arquivo maior que o limite de 50 MB.")
+        d = json.loads(self.rfile.read(n) or b"{}")
+        if not isinstance(d, dict):
+            raise ValueError("Envie um objeto JSON.")
+        return d
 
     def _rota(self):
         return urllib.parse.urlparse(self.path).path
 
     def do_GET(self):
         path = self._rota()
+        if re.fullmatch(r"/fonts/outfit-(400|500|600|700)\.ttf", path):
+            with open(os.path.join(HERE, path[1:]), "rb") as f:
+                return self._envia(200, f.read(), "font/ttf")
+        if path in ("/theme.css", "/crm.js", "/glass.css", "/effects.js", "/gsap.min.js"):
+            with open(os.path.join(HERE, path[1:]), "rb") as f:
+                return self._envia(200, f.read(), "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8")
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
                 return self._envia(200, f.read(), "text/html; charset=utf-8")
@@ -545,6 +732,18 @@ class H(BaseHTTPRequestHandler):
             return self._envia(200, painel_inicio())
         if path == "/api/config":
             return self._envia(200, config)
+        if path == "/api/backup":
+            with lock:
+                return self._envia(200, snapshot())
+        if path == "/api/backups":
+            pasta = os.path.join(DADOS, "backups")
+            return self._envia(200, sorted(os.listdir(pasta), reverse=True) if os.path.isdir(pasta) else [])
+        if path == "/api/leads/pagina":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            offset, limit = max(0, int(q.get("offset", [0])[0])), min(500, max(1, int(q.get("limit", [100])[0])))
+            with lock:
+                total, rows = store.page(offset, limit)
+                return self._envia(200, {"total": total, "items": [lead_publico(l) for l in rows]})
         if path == "/api/buscas":
             with lock:
                 lista = sorted((resumo_busca(b) for b in buscas.values()), key=lambda x: -x["criado_em"])
@@ -565,6 +764,20 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self._rota()
+        if path == "/api/restaurar":
+            d = self._corpo()
+            if "arquivo" in d:
+                nome = d["arquivo"]
+                if not isinstance(nome, str) or not re.fullmatch(r"[\w-]+\.json", nome):
+                    raise ValueError("Nome de backup inválido.")
+                d = _le(os.path.join(DADOS, "backups", nome), None)
+            restaurar(d)
+            return self._envia(200, {"ok": True})
+        if path == "/api/leads/excluir":
+            ids = self._corpo().get("ids")
+            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+                raise ValueError("Selecione os leads para excluir.")
+            return self._envia(200, {"excluidos": excluir_leads(ids)})
         if path == "/api/buscas":
             d = self._corpo()
             nichos = [n.strip() for n in re.split(r"[\n,;]", d.get("nichos", "")) if n.strip()][:10]
@@ -590,11 +803,13 @@ class H(BaseHTTPRequestHandler):
             with fila_cond:
                 if m.group(2) == "cancelar":
                     b["cancelar"] = True
-                    if b["id"] in fila:
+                    if b["id"] in fila and not b.get("job_atual"):
                         fila.remove(b["id"])
                         b["estado"], b["etapa"] = "cancelada", "Cancelada"
                 elif b["estado"] not in ("rodando", "na_fila"):
                     b.update(estado="na_fila", etapa="Na fila", cancelar=False, avisos=[], progresso=None)
+                    for key in ("geo", "job_atual", "job_inicio", "linhas_parciais", "regioes_concluidas", "enriquecidos", "concluido_em", "novos_ids"):
+                        b.pop(key, None)
                     fila.append(b["id"])
                     fila_cond.notify()
             salvar_busca(b)
@@ -635,6 +850,14 @@ class H(BaseHTTPRequestHandler):
             return self._envia(404, {"erro": "não encontrado"})
         d, l = self._corpo(), leads[m.group(1)]
         with lock:
+            if "retorno" in d:
+                valor = d["retorno"]
+                if valor is not None and (not isinstance(valor, (int, float)) or not 0 < valor < 32503680000):
+                    raise ValueError("Data de retorno inválida.")
+                l["retorno"] = valor
+                registrar(l, "agenda", "Retorno agendado" if valor else "Retorno concluído ou removido")
+            if "motivo_perda" in d:
+                l["motivo_perda"] = str(d["motivo_perda"])[:500]
             if d.get("status") in STATUS_LEAD and d["status"] != l["status"]:
                 l["status"] = d["status"]
                 registrar(l, "status", f"Status: {NOME_STATUS[d['status']]}")
@@ -659,41 +882,63 @@ class H(BaseHTTPRequestHandler):
         self._envia(200, config)
 
     def do_DELETE(self):
+        m = re.fullmatch(r"/api/leads/([\w-]+)", self._rota())
+        if m:
+            n = excluir_leads([m.group(1)])
+            return self._envia(200 if n else 404, {"excluidos": n})
         m = re.fullmatch(r"/api/buscas/([\w-]+)", self._rota())
         if not m or m.group(1) not in buscas:
             return self._envia(404, {"erro": "não encontrado"})
-        manter_trabalhados = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("leads") != ["apagar"]
         with lock:
+            if m.group(1) not in buscas:
+                return self._envia(404, {"erro": "não encontrado"})
+            if buscas[m.group(1)]["estado"] in ("rodando", "na_fila"):
+                return self._envia(409, {"erro": "Cancele a busca e aguarde o motor antes de excluí-la."})
+            backup("antes-exclusao-busca")
             b = buscas.pop(m.group(1))
             b["cancelar"] = True
             if b["id"] in fila:
                 fila.remove(b["id"])
-            for lid in b.get("lead_ids", []):
-                l = leads.get(lid)
-                if not l:
-                    continue
-                if b["id"] in l["buscas"]:
-                    l["buscas"].remove(b["id"])
-                trabalhado = l["status"] != "novo" or l.get("obs") or len(l.get("historico", [])) > 1
-                if not l["buscas"] and not (manter_trabalhados and trabalhado):
-                    del leads[lid]
+            ids = set(b.get("lead_ids", []))
+            ids.update(lid for lid, l in leads.items() if b["id"] in l.get("buscas", []))
+            n = excluir_leads(ids, salvar=False)
+            persistir()
         try:
             os.remove(os.path.join(DIR_BUSCAS, f"{b['id']}.json"))
         except OSError:
             pass
-        salvar_leads()
         for jid in b.get("jobs_motor", []):
             try:
                 kit.req("DELETE", f"/api/v1/jobs/{jid}")
             except Exception:
                 pass
-        self._envia(200, {"ok": True})
+        self._envia(200, {"ok": True, "excluidos": n})
 
+
+def proteger(handler):
+    def wrapped(self):
+        try:
+            if self.command != "GET":
+                origin = self.headers.get("Origin")
+                if origin and origin not in (f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}"):
+                    return self._envia(403, {"erro": "Origem não permitida."})
+                if self.command != "DELETE" and not self.headers.get("Content-Type", "").startswith("application/json"):
+                    return self._envia(415, {"erro": "Use application/json."})
+            return handler(self)
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            self._envia(400, {"erro": "Dados inválidos: " + str(e)[:200]})
+        except (OSError, RuntimeError, sqlite3.DatabaseError) as e:
+            print("Erro no painel:", e, file=sys.stderr)
+            self._envia(500, {"erro": "Não foi possível concluir. Verifique o espaço em disco e o log do painel."})
+    return wrapped
+
+for metodo in ("GET", "POST", "PATCH", "PUT", "DELETE"):
+    setattr(H, "do_" + metodo, proteger(getattr(H, "do_" + metodo)))
 
 def main():
+    srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     carregar()
     threading.Thread(target=trabalhador, daemon=True).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     try:  # o navegador pode resolver "localhost" como ::1 (IPv6); continua só local
         class H6(ThreadingHTTPServer):
             address_family = socket.AF_INET6

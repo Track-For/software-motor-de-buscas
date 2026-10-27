@@ -19,3 +19,5 @@ Thumbs.db
 
 # Painel: buscas e leads salvos localmente (dados pessoais — nunca commitar)
 painel/dados/
+.qa/
+painel/*.log

@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prospecta</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<meta name="description" content="Prospecta: encontre empresas e acompanhe suas próximas conversas em um CRM local.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%23006BF5'/%3E%3Ctext x='11' y='29' font-size='27' fill='white' font-family='sans-serif'%3EP%3C/text%3E%3C/svg%3E">
 <style>
 :root{
   --bg:#f8f9fa; --surface:#ffffff; --surface-2:#f8f9fa; --ink:#202124; --ink-2:#3c4043; --muted:#5f6368; --line:#dadce0; --line-2:#f1f3f4;
@@ -276,8 +276,11 @@ table.t{width:100%;border-collapse:collapse}
 .fade{animation:fade .18s ease-out}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 </style>
+<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/glass.css">
 </head>
 <body>
+<a class="skip-link" href="#page">Pular para o conteúdo</a>
 <div class="app">
   <aside class="side" id="side">
     <div class="brand">
@@ -298,12 +301,13 @@ table.t{width:100%;border-collapse:collapse}
       <div class="gsearch"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="gq" type="search" placeholder="Buscar lead pelo nome… (Enter)"></div>
       <a class="btn pri sm" href="#/nova"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Nova busca</a>
     </header>
-    <div class="page" id="page"></div>
+    <main class="page" tabindex="-1"><div class="error-banner" id="errorBanner" hidden role="alert"><span id="errorText"></span><button class="btn sm" id="retryLoad">Tentar novamente</button></div><div id="page"></div></main>
   </div>
 </div>
 <div class="ov" id="ov"></div>
-<aside class="drawer" id="drawer"></aside>
-<div class="toast" id="toast"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Ficha do lead" inert></aside>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog class="confirm-dialog" id="confirmDialog"><h2 id="confirmTitle"></h2><p id="confirmText"></p><div class="row"><button class="btn" id="confirmNo">Cancelar</button><button class="btn pri" id="confirmYes">Confirmar</button></div></dialog>
 
 <script>
 // ═════════════ utilidades ═════════════
@@ -323,7 +327,7 @@ function dominio(u){ try{ return new URL(u.startsWith("http")?u:"http://"+u).hos
 const ls = { get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch{return d} }, set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} } };
 function toast(t){ const el=$("#toast"); el.textContent=t; el.classList.add("on"); clearTimeout(toast.t); toast.t=setTimeout(()=>el.classList.remove("on"),2400); }
 async function api(path, opts={}){
-  const r = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts, body: opts.body?JSON.stringify(opts.body):undefined});
+  const r = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts, signal:AbortSignal.timeout(65000), body: opts.body?JSON.stringify(opts.body):undefined});
   const j = await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.erro || `Erro ${r.status}`);
   return j;
@@ -369,10 +373,15 @@ const ESTADO = {na_fila:"Na fila", rodando:"Rodando", concluida:"Concluída", er
 
 // ═════════════ estado global ═════════════
 const S = { leads:[], map:{}, buscas:[], config:null, municipios:[] };
-async function carregaLeads(){ try{ S.leads = await api("/api/leads"); S.map = Object.fromEntries(S.leads.map(l=>[l.id,l])); }catch{} }
+async function carregaLeads(){
+  try{ const rows=[]; let total=1;
+    while(rows.length<total){ const p=await api(`/api/leads/pagina?offset=${rows.length}&limit=500`); total=p.total; rows.push(...p.items); if(!p.items.length) break; }
+    S.leads=rows; S.map=Object.fromEntries(rows.map(l=>[l.id,l])); return true;
+  }catch(err){ mostraErro("Não foi possível atualizar os leads. "+err.message); return false; }
+}
 async function carregaBuscas(){
   const antes = Object.fromEntries(S.buscas.map(b=>[b.id,b.estado]));
-  try{ S.buscas = await api("/api/buscas"); }catch{ return false; }
+  try{ S.buscas = await api("/api/buscas"); }catch(err){ mostraErro("Não foi possível atualizar as buscas. "+err.message); return false; }
   return S.buscas.some(b => antes[b.id] && antes[b.id]!==b.estado && b.estado==="concluida");
 }
 function upsertLead(l){ const p = {...l, n_hist:(l.historico||[]).length}; delete p.historico;
@@ -380,7 +389,7 @@ function upsertLead(l){ const p = {...l, n_hist:(l.historico||[]).length}; delet
 
 // ═════════════ navegação ═════════════
 const NAV = [
-  ["sec","Visão geral"], ["inicio","Início","home"],
+  ["sec","Visão geral"], ["inicio","Visão geral","home"], ["agenda","Próximos contatos","hist"],
   ["sec","Prospecção"], ["nova","Nova busca","plus"], ["buscas","Buscas","hist"], ["leads","Leads","users"], ["funil","Funil de vendas","kanban"],
   ["sec","Ajustes"], ["mensagens","Mensagens","msg"], ["config","Configurações","gear"],
 ];
@@ -414,11 +423,11 @@ VIEWS.inicio = async () => {
       <div class="acts"><a class="btn" href="#/funil">${ic("kanban")}Abrir funil</a><a class="btn pri" href="#/nova">${ic("plus")}Nova busca</a></div></div>
       <div id="ini"><div class="empty">Carregando…</div></div>`;
   }
-  let d; try{ d = await api("/api/inicio"); }catch{ return; }
+  let d; try{ d = await api("/api/inicio"); }catch(err){ mostraErro("Não foi possível carregar o resumo. "+err.message); return; }
   if(rota().v!=="inicio" || !$("#ini")) return;
   const ativas = S.buscas.filter(b=>b.estado==="rodando"||b.estado==="na_fila");
-  const blocoAtivas = ativas.length ? `<div class="card ${primeira?"fade":""}" style="margin-bottom:16px"><div class="card-b">${ativas.map(b=>`
-      <a href="#/buscas/${b.id}" style="color:inherit;text-decoration:none;display:block"><div class="row" style="margin-bottom:8px;flex-wrap:wrap"><span class="pill e-${b.estado}">${ESTADO[b.estado]}</span><b>${esc(b.parametros.nichos.join(", "))}</b><span class="muted sm">· ${esc(localB(b))}</span><span class="muted sm" style="margin-left:auto">${esc(b.etapa)}</span></div>${barraB(b)}</a>`).join('<div class="sep"></div>')}</div></div>` : "";
+  const blocoAtivas = heroInicio(d) + (ativas.length ? `<div class="card ${primeira?"fade":""}" style="margin-bottom:16px"><div class="card-b">${ativas.map(b=>`
+      <a href="#/buscas/${b.id}" style="color:inherit;text-decoration:none;display:block"><div class="row" style="margin-bottom:8px;flex-wrap:wrap"><span class="pill e-${b.estado}">${ESTADO[b.estado]}</span><b>${esc(b.parametros.nichos.join(", "))}</b><span class="muted sm">· ${esc(localB(b))}</span><span class="muted sm" style="margin-left:auto">${esc(b.etapa)}</span></div>${barraB(b)}</a>`).join('<div class="sep"></div>')}</div></div>` : "");
   if(!d.total){
     $("#ini").innerHTML = blocoAtivas + `<div class="card fade"><div class="empty" style="padding:70px 20px"><div class="ic">${ic("spark")}</div><b>Nenhum lead ainda</b>${ativas.length?"Sua primeira busca está rodando. Os leads aparecem aqui quando ela terminar.":"Faça sua primeira busca: escolha um nicho e uma cidade."}${ativas.length?"":`<div style="margin-top:16px"><a class="btn pri lg" href="#/nova">${ic("plus")}Fazer primeira busca</a></div>`}</div></div>`; return;
   }
@@ -545,10 +554,13 @@ function barraB(b){
   const p=b.progresso; if(p&&p.total){ const v = p.fase==="maps" ? p.atual/p.total*.8 : .8+p.atual/p.total*.2; return `<div class="bar"><i style="width:${Math.round(v*100)}%"></i></div>`; }
   return `<div class="bar ind"><i></i></div>`;
 }
+const buscasSelecionadas = new Set();
 VIEWS.buscas = arg => arg ? viewBusca(arg) : viewBuscas();
 function viewBuscas(){
   crumbs([["Prospecção","#/buscas"],["Buscas"]]);
   const bs = S.buscas;
+  const disponiveis = bs.filter(b=>!["rodando","na_fila"].includes(b.estado));
+  for(const id of buscasSelecionadas) if(!disponiveis.some(b=>b.id===id)) buscasSelecionadas.delete(id);
   $("#page").innerHTML = `<div class="ph"><div><h1>Buscas</h1><p>Histórico de todas as buscas, da mais recente para a mais antiga.</p></div><div class="acts"><a class="btn pri" href="#/nova">${ic("plus")}Nova busca</a></div></div>
   <div class="card">${!bs.length?`<div class="empty" style="padding:60px 20px"><div class="ic">${ic("hist")}</div><b>Nenhuma busca ainda</b>Comece pela primeira.<div style="margin-top:14px"><a class="btn pri" href="#/nova">${ic("plus")}Nova busca</a></div></div>`:
   `<div class="twrap"><table class="t"><thead><tr><th>Busca</th><th>Local</th><th>Tamanho</th><th>Quando</th><th>Situação</th><th style="text-align:right">Empresas</th><th style="text-align:right">WhatsApp</th><th style="text-align:right">E-mail</th></tr></thead><tbody>
@@ -559,7 +571,36 @@ function viewBuscas(){
     <td class="num" style="text-align:right">${b.estado==="concluida"?`${fN(b.com_whatsapp)} <span class="muted xs">${fPct(b.com_whatsapp,b.total)}</span>`:"—"}</td>
     <td class="num" style="text-align:right">${b.estado==="concluida"?`${fN(b.com_email)} <span class="muted xs">${fPct(b.com_email,b.total)}</span>`:"—"}</td></tr>`).join("")}
   </tbody></table></div>`}</div>`;
-  $$("tr[data-b]").forEach(tr => tr.onclick = () => location.hash = `#/buscas/${tr.dataset.b}`);
+  const excluir = document.createElement('button');
+  excluir.className = 'btn danger';
+  excluir.textContent = `Excluir selecionadas (${buscasSelecionadas.size})`;
+  excluir.disabled = !buscasSelecionadas.size;
+  excluir.onclick = () => apagaBuscas([...buscasSelecionadas]);
+  $("#page .acts").prepend(excluir);
+  const header = $("#page thead tr");
+  if(header){
+    const th = document.createElement('th');
+    th.innerHTML = '<input type="checkbox" aria-label="Selecionar todas as buscas disponíveis">';
+    const input = th.firstElementChild;
+    input.disabled = !disponiveis.length;
+    input.checked = disponiveis.length > 0 && buscasSelecionadas.size === disponiveis.length;
+    input.indeterminate = buscasSelecionadas.size > 0 && !input.checked;
+    input.onchange = () => { disponiveis.forEach(b=>input.checked?buscasSelecionadas.add(b.id):buscasSelecionadas.delete(b.id));viewBuscas(); };
+    header.prepend(th);
+  }
+  $$("tr[data-b]").forEach(tr => {
+    const td = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('aria-label', `Selecionar busca ${tr.querySelector('.lead-n').textContent}`);
+    input.checked = buscasSelecionadas.has(tr.dataset.b);
+    input.disabled = !disponiveis.some(b=>b.id===tr.dataset.b);
+    if(input.disabled)input.title = 'Cancele a busca e aguarde para excluir';
+    td.onclick = e=>e.stopPropagation();
+    input.onchange = () => {input.checked?buscasSelecionadas.add(tr.dataset.b):buscasSelecionadas.delete(tr.dataset.b);viewBuscas();};
+    td.append(input);tr.prepend(td);
+    tr.onclick = () => location.hash = `#/buscas/${tr.dataset.b}`;
+  });
 }
 function viewBusca(id){
   const b = S.buscas.find(x=>x.id===id);
@@ -584,7 +625,8 @@ function viewBusca(id){
       <div class="card fade" id="tbl"></div>`:""}`;
   $("#bCanc") && ($("#bCanc").onclick = async()=>{ await api(`/api/buscas/${id}/cancelar`,{method:"POST"}); await carregaBuscas(); render(); });
   $("#bRep") && ($("#bRep").onclick = async()=>{ if(!confirma("rep"+id,"Rodar esta busca de novo? Leads novos entram na base; status e anotações dos atuais são mantidos.")) return; await api(`/api/buscas/${id}/repetir`,{method:"POST"}); await carregaBuscas(); render(); });
-  $("#bDel").onclick = async()=>{ if(!confirma("del"+id,"Excluir esta busca? Leads que você já trabalhou (status ou anotação) continuam na base.")) return; await api(`/api/buscas/${id}`,{method:"DELETE"}); await Promise.all([carregaBuscas(),carregaLeads()]); toast("Busca excluída"); location.hash="#/buscas"; };
+  $("#bDel").disabled = rodando;
+  $("#bDel").onclick = () => apagaBuscas([id]);
   if($("#tbl")) api(`/api/buscas/${id}`).then(d => { const ids=new Set(d.lead_ids); const fonte = () => S.leads.filter(l=>ids.has(l.id));
     $("#bExpB") && ($("#bExpB").onclick = () => exportaCsv(fonte(), semAc(b.parametros.nichos[0]).replace(/\W+/g,"-")+"_"+semAc(b.parametros.cidade).replace(/\W+/g,"-")));
     tabelaLeads($("#tbl"), fonte, "b_"+id); });
@@ -637,7 +679,7 @@ function tabelaLeads(el, fonte, chave, comAcoesTopo){
       </div>
       ${TB.sel.size?`<div class="bulk">${fN(TB.sel.size)} selecionado${TB.sel.size>1?"s":""}
         <select class="in" id="bulkSt" style="padding:5px 26px 5px 10px"><option value="">Mudar status para…</option>${STATUS.map(([v,n])=>`<option value="${v}">${n}</option>`).join("")}</select>
-        <button class="btn sm" id="bulkExp">${ic("down")}Exportar seleção</button><button class="btn sm ghost" id="bulkClr">Limpar seleção</button></div>`:""}
+        <button class="btn sm" id="bulkExp">${ic("down")}Exportar seleção</button><button class="btn sm danger" id="bulkDel">${ic("trash")}Excluir leads</button><button class="btn sm ghost" id="bulkClr">Limpar seleção</button></div>`:""}
       <div class="twrap"><table class="t"><thead><tr><th class="chk"><input type="checkbox" id="selAll" ${todosSel?"checked":""}></th>
         ${th("nome","Empresa")}${th("bairro","Local")}${th("telefone","Telefone")}${th("contato","Canais")}${th("nota","Nota")}${th("status","Status")}${th("atualizado_em","Atualizado")}</tr></thead>
       <tbody>${vis.map(l=>`<tr data-id="${esc(l.id)}" class="${TB.sel.has(l.id)?"sel":""}">
@@ -667,6 +709,7 @@ function tabelaLeads(el, fonte, chave, comAcoesTopo){
     $("#pA",el) && ($("#pA",el).onclick = () => { TB.pag--; draw(); });
     $("#pP",el) && ($("#pP",el).onclick = () => { TB.pag++; draw(); });
     $("#bulkClr",el) && ($("#bulkClr",el).onclick = () => { TB.sel.clear(); draw(); });
+    $("#bulkDel",el) && ($("#bulkDel",el).onclick = () => apagaLeads([...TB.sel]));
     $("#bulkExp",el) && ($("#bulkExp",el).onclick = () => exportaCsv(ordena(fonte()).filter(l=>TB.sel.has(l.id)), "selecao"));
     $("#bulkSt",el) && ($("#bulkSt",el).onchange = async e => { const st=e.target.value; if(!st) return;
       const r = await api("/api/leads/lote",{method:"POST",body:{ids:[...TB.sel],status:st}}); await carregaLeads(); TB.sel.clear(); toast(`${fN(r.alterados)} leads → ${NOME_ST[st]}`); draw(); });
@@ -682,13 +725,13 @@ function tabelaLeads(el, fonte, chave, comAcoesTopo){
 let leadAberto = null;
 async function abreLead(id){
   let l; try{ l = await api(`/api/leads/${encodeURIComponent(id)}`); }catch{ return toast("Lead não encontrado"); }
-  leadAberto = l; desenhaLead(); $("#drawer").classList.add("on"); $("#ov").classList.add("on");
+  leadAberto = l; focoAnterior=document.activeElement; desenhaLead(); $("#drawer").inert=false; $("#drawer").classList.add("on"); $("#ov").classList.add("on"); $("#drX").focus();
 }
 VIEWS.lead = id => { history.replaceState(null, "", "#/leads"); render(); abreLead(decodeURIComponent(id)); };
-function fechaLead(){ $("#drawer").classList.remove("on"); $("#ov").classList.remove("on"); leadAberto=null;
-  const t=$("#tbl"); if(t&&t._draw) t._draw(); if(rota().v==="funil"&&VIEWS.funil._draw) VIEWS.funil._draw(); }
+function fechaLead(){ $("#drawer").classList.remove("on"); $("#drawer").inert=true; $("#ov").classList.remove("on"); leadAberto=null; focoAnterior?.focus();
+  const t=$("#tbl"); if(t&&t._draw) t._draw(); if(rota().v==="funil"&&VIEWS.funil._draw) VIEWS.funil._draw(); if(["agenda","inicio"].includes(rota().v))VIEWS[rota().v](); }
 $("#ov").onclick = fechaLead;
-document.addEventListener("keydown", e => { if(e.key==="Escape" && leadAberto) fechaLead(); });
+document.addEventListener("keydown", e => { if(e.key==="Escape" && leadAberto && !$("#confirmDialog").open) fechaLead(); });
 function desenhaLead(){
   const l = leadAberto, tpls = S.config?.templates||[], tplSel = ls.get("tplSel", S.config?.padrao);
   const icEv = {whatsapp:"wa",status:"flag",nota:"note",ligacao:"phone",email:"mail",criado:"spark"};
@@ -728,20 +771,24 @@ function desenhaLead(){
         <dt>Origem</dt><dd>${(l.buscas||[]).map(bid=>{ const b=S.buscas.find(x=>x.id===bid); return b?`<a href="#/buscas/${bid}">${esc(b.parametros.nichos.join(", "))}</a>`:""; }).filter(Boolean).join(", ")||esc(l.nicho||"—")}</dd>
       </dl>
       <div class="sec-t">Anotações e histórico</div>
+      ${agendaCampos(l)}
       <textarea class="in" id="nota" rows="2" placeholder="Ex.: falei com a recepcionista, retornar na segunda…"></textarea>
       <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm pri" id="bNota">${ic("note")}Adicionar anotação</button></div>
       <div class="tl" style="margin-top:14px">${[...(l.historico||[])].reverse().map(e=>`<div class="tl-i"><div class="tl-d">${ic(icEv[e.tipo]||"note")}</div><div><div class="tl-t">${esc(e.tipo==="whatsapp"?"Chamado no WhatsApp":e.tipo==="ligacao"?"Ligação":e.tipo==="email"?"E-mail enviado":e.txt)}</div><div class="tl-m">${fData(e.t)}</div></div></div>`).join("")}</div>
+      <div class="danger-zone"><button class="btn danger" id="drDelete">${ic("trash")}Excluir este lead</button><p class="hint">Remove o lead de toda a base e das extrações. Um backup será criado antes da exclusão.</p></div>
     </div>`;
   $("#drX").onclick = fechaLead;
+  $("#drDelete").onclick = () => apagaLeads([l.id]);
+  conectaAgenda(l);
   const wa = $("#drWa");
   if(wa){
     const atual = () => tpls.find(t=>t.id===($("#tplSel")?.value||tplSel)) || tpls[0];
     const href = () => `https://wa.me/${num}?text=${encodeURIComponent(preencheTpl(atual()?.texto||"", l))}`;
     wa.href = href();
     $("#tplSel") && ($("#tplSel").onchange = e => { ls.set("tplSel", e.target.value); wa.href = href(); });
-    wa.onclick = () => { wa.href = href(); registraEv("whatsapp"); };
+    wa.onclick = () => { wa.href = href(); toast("WhatsApp aberto. Após enviar, registre o contato abaixo."); };
   }
-  $$("[data-ev]", $("#drawer")).forEach(a => a.addEventListener("click", () => registraEv(a.dataset.ev)));
+  $$("[data-ev]", $("#drawer")).forEach(a => a.addEventListener("click", () => toast("Após concluir, registre o contato abaixo.")));
   $("#stsel").onclick = async e => { const st=e.target.dataset.st; if(!st||st===l.status) return;
     leadAberto = await api(`/api/leads/${encodeURIComponent(l.id)}`,{method:"PATCH",body:{status:st}}); upsertLead(leadAberto); desenhaLead(); toast(`→ ${NOME_ST[st]}`); };
   $("#bNota").onclick = async () => { const t=$("#nota").value.trim(); if(!t) return;
@@ -750,7 +797,7 @@ function desenhaLead(){
 async function registraEv(tipo){
   const l = leadAberto; if(!l) return;
   try{ const novo = await api(`/api/leads/${encodeURIComponent(l.id)}/evento`,{method:"POST",body:{tipo}}); upsertLead(novo);
-    if(leadAberto && leadAberto.id===novo.id){ leadAberto = novo; setTimeout(desenhaLead, 300); } }catch{}
+    if(leadAberto && leadAberto.id===novo.id){ leadAberto = novo; desenhaLead(); toast("Contato registrado"); } }catch(err){ mostraErro(err.message); }
 }
 function preencheTpl(t, l){ return String(t||"").replace(/\{nome\}/g, l.nome||"").replace(/\{cidade\}/g, l.cidade||"")
   .replace(/\{bairro\}/g, l.bairro||"").replace(/\{categoria\}/g, (l.categoria||"").toLowerCase()); }
@@ -785,8 +832,8 @@ VIEWS.funil = () => {
       col.ondragover = e => { e.preventDefault(); col.classList.add("drop"); };
       col.ondragleave = e => { if(!col.contains(e.relatedTarget)) col.classList.remove("drop"); };
       col.ondrop = async e => { e.preventDefault(); col.classList.remove("drop"); const st=col.dataset.st, l=S.map[arrastando]; if(!l||l.status===st) return;
-        l.status=st; l.atualizado_em=Date.now()/1000; draw();
-        try{ upsertLead(await api(`/api/leads/${encodeURIComponent(l.id)}`,{method:"PATCH",body:{status:st}})); toast(`${l.nome} → ${NOME_ST[st]}`); }catch(err){ toast(err.message); } };
+        const anterior={...l}; l.status=st; l.atualizado_em=Date.now()/1000; draw();
+        try{ upsertLead(await api(`/api/leads/${encodeURIComponent(l.id)}`,{method:"PATCH",body:{status:st}})); toast(`${l.nome} → ${NOME_ST[st]}`); }catch(err){ Object.assign(l,anterior); draw(); mostraErro("Etapa não salva. "+err.message); } };
     });
   };
   $("#kq").oninput = e => { FK.texto=e.target.value; ls.set("fk",FK); draw(); };
@@ -887,7 +934,7 @@ function exportaCsv(rows, nome){
     ["Endereço","endereco"],["Bairro","bairro"],["Cidade","cidade"],["UF","uf"],["CEP","cep"],
     ["Nota",l=>l.nota?String(l.nota).replace(".",","):""],["Avaliações","avaliacoes"],["Google Maps","maps"],
     ["Status",l=>NOME_ST[l.status]||l.status],["Anotações","obs"]];
-  const cel = v => { v=String(v??""); return /[;"\n\r]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v; };
+  const cel = v => { v=String(v??""); if(/^[\s]*[=+@-]/.test(v)) v="'"+v; return /[;"\n\r]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v; };
   // separador ; + BOM: abre certinho no Excel em português
   const csv = "﻿" + [cols.map(c=>c[0]).join(";"), ...rows.map(l=>cols.map(([,k])=>cel(typeof k==="function"?k(l):l[k])).join(";"))].join("\r\n");
   const a = document.createElement("a");
@@ -906,7 +953,7 @@ async function status(){
     $("#dot").className="dot "+(s.motor?"ok":"off");
     $("#motorTxt").textContent = s.motor?"Motor ligado":"Motor desligado";
     $("#motorSub").textContent = s.motor?"Roda 100% no seu computador":"Abra o Docker Desktop";
-  }catch{ $("#dot").className="dot off"; $("#motorTxt").textContent="Painel desconectado"; $("#motorSub").textContent="Reabra o Prospeccao.command"; }
+  }catch{ $("#dot").className="dot off"; $("#motorTxt").textContent="Painel desconectado"; $("#motorSub").textContent="Reabra o iniciador do sistema"; }
 }
 async function tick(){
   if(document.hidden) return;
@@ -920,12 +967,9 @@ async function tick(){
   else if(v==="inicio" && (ativa || concluiu)) VIEWS.inicio();
   else if(concluiu && (v==="leads" || v==="funil")) render();
 }
-(async () => {
-  await Promise.all([carregaBuscas(), carregaLeads(), status(), api("/api/config").then(c=>S.config=c).catch(()=>{})]);
-  render();
-  setInterval(tick, 3000);
-  setInterval(status, 15000);
-})();
 </script>
+<script src="/crm.js"></script>
+<script src="/gsap.min.js"></script>
+<script src="/effects.js"></script>
 </body>
 </html>
