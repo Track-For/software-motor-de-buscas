@@ -473,6 +473,9 @@ const SUGESTOES = ["clínicas odontológicas","clínicas de estética","academia
   "imobiliárias","pet shops","salões de beleza","barbearias","restaurantes","oficinas mecânicas","lojas de material de construção",
   "psicólogos","fisioterapia","autoescolas","escolas de idiomas","farmácias","óticas","clínicas veterinárias","nutricionistas"];
 const NB = { tamanho: ls.get("nb_tam","padrao"), cidade: ls.get("ultimaCidade", null) };
+const SEGMENTOS = ["Agronegócio", "Alimentação", "Arquitetura", "Automotivo", "Brindes", "Comércio e Varejo",
+  "Consultoria", "Educação", "Esportes e Patrocínios", "Estética e Beleza", "Eventos", "Impacto Social", "Indústria",
+  "Infraestrutura e Sustentabilidade", "Investimento Estratégico", "Jurídico", "Marketing, Comunicação e Conteúdo", "Moda", "Saúde", "Seguros"];
 VIEWS.nova = () => {
   crumbs([["Prospecção","#/buscas"],["Nova busca"]]);
   $("#page").innerHTML = `<div class="ph fade"><div><h1>Nova busca</h1><p>Encontre empresas no Google Maps com telefone, WhatsApp, e-mail e redes sociais.</p></div></div>
@@ -481,7 +484,13 @@ VIEWS.nova = () => {
       <label class="lbl" style="margin-top:0" for="nichos">O que você procura?</label>
       <input class="in" id="nichos" placeholder="ex.: clínicas odontológicas, ortodontistas" value="${esc(ls.get("nb_nichos",""))}">
       <div class="hint">Pode colocar mais de um, separados por vírgula. Escreva do jeito que um cliente buscaria no Google.</div>
-      <div class="chips" id="sug" style="margin-top:10px">${SUGESTOES.map(s=>`<span class="chip" data-s="${esc(s)}">${esc(s)}</span>`).join("")}</div>
+      <div id="sug" style="margin-top:10px">
+        <div class="lbl">Segmentos</div>
+        <div class="chips">${SEGMENTOS.map(s=>`<button type="button" class="chip" data-s="${esc(s.replaceAll(',', ''))}" aria-pressed="false">${esc(s)}</button>`).join("")}</div>
+        <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">Sugestões específicas</summary>
+        <div class="chips" style="margin-top:10px">${SUGESTOES.map(s=>`<button type="button" class="chip" data-s="${esc(s)}" aria-pressed="false">${esc(s)}</button>`).join("")}</div></details>
+      </div>
+      <div class="hint">Selecione até 10 termos por busca. Para segmentos amplos, você pode editar o campo acima com o tipo de empresa desejado.</div>
       <div class="grid g2" style="gap:14px">
         <div><label class="lbl" for="cidade">Cidade</label>
           <div class="ac"><input class="in" id="cidade" placeholder="Digite a cidade…" value="${NB.cidade?esc(NB.cidade.n+" - "+NB.cidade.uf):""}"><div class="ac-list" id="acList"></div></div></div>
@@ -507,11 +516,13 @@ VIEWS.nova = () => {
       <div class="note info">${ic("spark")}<span>As buscas rodam uma de cada vez, numa fila. Pode enfileirar várias e continuar trabalhando enquanto isso.</span></div>
     </div>
   </div>`;
-  const marca = () => { const at = $("#nichos").value.split(",").map(x=>x.trim()); $$("#sug .chip").forEach(c=>c.classList.toggle("on", at.includes(c.dataset.s))); };
+  const marca = () => { const at = $("#nichos").value.split(/[,;\n]/).map(x=>x.trim()); $$("#sug .chip").forEach(c=>{const selected=at.includes(c.dataset.s);c.classList.toggle("on",selected);c.setAttribute("aria-pressed",String(selected));}); };
   marca();
   $("#nichos").oninput = () => { ls.set("nb_nichos", $("#nichos").value); marca(); };
   $("#sug").onclick = e => { const s=e.target.dataset.s; if(!s) return;
-    const at=$("#nichos").value.split(",").map(x=>x.trim()).filter(Boolean), i=at.indexOf(s); i>=0?at.splice(i,1):at.push(s);
+    const at=$("#nichos").value.split(/[,;\n]/).map(x=>x.trim()).filter(Boolean), i=at.indexOf(s);
+    if(i<0&&at.length>=10)return toast("Selecione até 10 termos por busca.");
+    i>=0?at.splice(i,1):at.push(s);
     $("#nichos").value = at.join(", "); ls.set("nb_nichos",$("#nichos").value); marca(); };
   const avisoTam = () => $("#tamAviso").innerHTML = NB.tamanho==="cidade" ? `<div class="note">${ic("flag")}<span>Busca grande: divide a cidade em 9 regiões e roda uma por vez. Se você fizer várias assim no mesmo dia, o Google pode bloquear seu IP por algumas horas.</span></div>` : "";
   avisoTam();
@@ -523,6 +534,7 @@ VIEWS.nova = () => {
     e.preventDefault();
     const c = NB.cidade && $("#cidade").value === `${NB.cidade.n} - ${NB.cidade.uf}` ? NB.cidade : (() => { const m=$("#cidade").value.match(/^\s*(.+?)\s*[-,/]\s*([A-Za-z]{2})\s*$/); return m?{n:m[1],uf:m[2].toUpperCase()}:null; })();
     if(!$("#nichos").value.trim()) return toast("Diga o que você procura (ex.: academias).");
+    if($("#nichos").value.split(/[,;\n]/).filter(x=>x.trim()).length>10) return toast("Use até 10 termos por busca.");
     if(!c) return toast("Escolha a cidade na lista.");
     $("#bGo").disabled = true;
     try{ const b = await api("/api/buscas",{method:"POST",body:{nichos:$("#nichos").value,cidade:c.n,uf:c.uf,bairro:$("#bairro").value,tamanho:NB.tamanho,redes:$("#redes").checked}});
