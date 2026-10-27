@@ -501,6 +501,8 @@ VIEWS.nova = () => {
       <div class="tams" id="tams">${Object.entries(TAM).map(([k,[n,q,t]])=>`<div class="tam ${NB.tamanho===k?"on":""}" data-v="${k}"><b>${n}</b><div class="q num">${q}</div><small>empresas · ${t}</small></div>`).join("")}</div>
       <div id="tamAviso" style="margin-top:10px"></div>
       <div class="sep" style="margin:20px 0"></div>
+      <label class="switch"><input type="checkbox" id="somenteSemSite"> Somente empresas sem site</label>
+      <div class="hint" style="margin:6px 0 14px">Mantém apenas resultados sem site informado no Google Maps e sem site já cadastrado no CRM. A busca pode retornar menos empresas; isso não garante que elas não tenham um site.</div>
       <label class="switch"><input type="checkbox" id="redes" checked> Procurar Instagram, Facebook e LinkedIn nos sites das empresas</label>
       <div style="display:flex;gap:10px;align-items:center;margin-top:22px;flex-wrap:wrap">
         <button class="btn pri lg" type="submit" id="bGo">${ic("search")}Buscar empresas</button>
@@ -537,7 +539,7 @@ VIEWS.nova = () => {
     if($("#nichos").value.split(/[,;\n]/).filter(x=>x.trim()).length>10) return toast("Use até 10 termos por busca.");
     if(!c) return toast("Escolha a cidade na lista.");
     $("#bGo").disabled = true;
-    try{ const b = await api("/api/buscas",{method:"POST",body:{nichos:$("#nichos").value,cidade:c.n,uf:c.uf,bairro:$("#bairro").value,tamanho:NB.tamanho,redes:$("#redes").checked}});
+    try{ const b = await api("/api/buscas",{method:"POST",body:{nichos:$("#nichos").value,cidade:c.n,uf:c.uf,bairro:$("#bairro").value,tamanho:NB.tamanho,redes:$("#redes").checked,somente_sem_site:$("#somenteSemSite").checked}});
       await carregaBuscas(); toast("Busca adicionada à fila"); location.hash = `#/buscas/${b.id}`; }
     catch(err){ toast(err.message); $("#bGo").disabled=false; }
   };
@@ -625,7 +627,7 @@ function viewBusca(id){
   const progresso = rodando?`<div class="card" style="margin-bottom:16px" id="prog"><div class="card-b"><div class="row" style="margin-bottom:10px;flex-wrap:wrap"><b>${b.estado==="na_fila"?"Aguardando na fila":"Em andamento"}</b><span class="muted sm">${esc(b.etapa)}</span>${b.parcial?`<span class="sm" style="margin-left:auto"><b class="num">${fN(b.parcial)}</b> empresas encontradas até agora</span>`:""}</div>${barraB(b)}
       <div class="hint" style="margin-top:10px">Pode sair desta tela: a busca continua rodando e os leads aparecem sozinhos quando terminar.</div></div></div>`:"";
   if(mesma && rodando && $("#prog")){ $("#prog").outerHTML = progresso; return; }
-  $("#page").innerHTML = `<div class="ph fade"><div><div class="row" style="margin-bottom:6px"><span class="pill e-${b.estado}">${ESTADO[b.estado]}</span><span class="muted sm">${TAM[b.parametros.tamanho][0]} · ${fData(b.criado_em)}</span></div><h1>${esc(b.parametros.nichos.join(", "))}</h1><p class="row">${ic("pin")} ${esc(localB(b))}</p></div>
+  $("#page").innerHTML = `<div class="ph fade"><div><div class="row" style="margin-bottom:6px"><span class="pill e-${b.estado}">${ESTADO[b.estado]}</span><span class="muted sm">${TAM[b.parametros.tamanho][0]} · ${fData(b.criado_em)}${b.parametros.somente_sem_site?" · Somente sem site":""}</span></div><h1>${esc(b.parametros.nichos.join(", "))}</h1><p class="row">${ic("pin")} ${esc(localB(b))}</p></div>
     <div class="acts">${b.estado==="concluida"?`<button class="btn" id="bExpB">${ic("down")}Exportar</button>`:""}${rodando?`<button class="btn" id="bCanc">${ic("x")}Cancelar</button>`:`<button class="btn" id="bRep">${ic("refresh")}Rodar de novo</button>`}<button class="btn danger" id="bDel">${ic("trash")}Excluir</button></div></div>
     ${progresso}
     ${b.estado==="erro"?`<div class="note err fade" style="margin-bottom:16px">${ic("flag")}<span><b>Deu erro:</b> ${esc(b.etapa)}</span></div>`:""}

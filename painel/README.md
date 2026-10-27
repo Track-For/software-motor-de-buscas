@@ -62,6 +62,8 @@ Se o painel não iniciar por JSON corrompido, preserve a pasta `dados`, corrija/
 
 ## Buscas e cancelamento
 
+Em **Nova busca**, marque **Somente empresas sem site** para guardar apenas resultados sem endereço de site no Google Maps e sem site já conhecido pelo CRM. O filtro vale para resultados parciais, retomadas e repetição da busca. Empresas com link de rede social no campo de site também ficam de fora. O motor consulta os resultados normalmente e o painel aplica o filtro antes de incorporar os leads; por isso o total pode ser menor e não há garantia de que a empresa realmente não tenha site. Buscas antigas continuam com o comportamento anterior.
+
 O painel salva o ID do job, as regiões concluídas e os resultados parciais. Em um reinício, reutiliza o job registrado e pula as regiões já concluídas. Resultados básicos são salvos antes do enriquecimento de contato.
 
 O motor v1.18.1 [oferece exclusão de jobs, mas não cancelamento imediato de execução](https://github.com/gosom/google-maps-scraper/blob/v1.18.1/web/service.go). Ao cancelar, o painel espera a região ativa terminar, não agenda outras regiões e conserva os resultados anteriores. Durante enriquecimento, requisições de site já iniciadas podem terminar antes do cancelamento. Se a conexão com o motor cair com um job ativo, a fila aguarda a reconexão em vez de iniciar novas extrações em paralelo.

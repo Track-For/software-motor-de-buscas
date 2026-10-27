@@ -49,6 +49,37 @@ class CRM(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.load(e)
 
+    def test_search_without_website_filters_before_save_and_enrichment(self):
+        self.b['parametros']['somente_sem_site'] = True
+        self.b['geo'] = [-23.5, -46.6, None]
+        app.leads['p1']['site'] = 'https://known.example.org'
+        rows = [self.row, self.row | {'place_id': 'no-site'},
+                self.row | {'place_id': 'with-site', 'website': 'https://example.org'},
+                self.row | {'place_id': 'social', 'website': 'https://instagram.com/example'}]
+        with patch.object(app, 'rodar_job', return_value=rows), patch.object(app, 'enriquecer') as enrich:
+            app.executar(self.b)
+            enrich.assert_not_called()
+        self.assertEqual(self.b['lead_ids'], ['no-site'])
+        self.assertEqual(self.b['novos'], 1)
+        self.assertNotIn('with-site', app.leads)
+        self.assertNotIn('social', app.leads)
+        self.assertEqual(app.leads['p1']['site'], 'https://known.example.org')
+        self.assertEqual(app.store.read('buscas')['b1']['parametros']['somente_sem_site'], True)
+        self.b['parametros']['somente_sem_site'] = False
+        self.assertIn('with-site', app.mesclar_leads(self.b, [app.lead_de(rows[2])]))
+
+    def test_search_without_website_api_and_repeat(self):
+        body = dict(nichos='Dentistas', cidade='São Paulo', uf='SP', tamanho='rapida', somente_sem_site=True)
+        status, result = self.req('/api/buscas', 'POST', body)
+        self.assertEqual(status, 201)
+        self.assertTrue(result['parametros']['somente_sem_site'])
+        bid = result['id']
+        self.req('/api/buscas/'+bid+'/cancelar', 'POST', {})
+        status, repeated = self.req('/api/buscas/'+bid+'/repetir', 'POST', {})
+        self.assertEqual(status, 200)
+        self.assertTrue(repeated['parametros']['somente_sem_site'])
+        self.assertEqual(self.req('/api/buscas', 'POST', body | {'somente_sem_site': 'true'})[0], 400)
+
     def test_delete_individual_updates_all_searches_and_persists(self):
         self.assertEqual(self.req('/api/leads/p1','DELETE')[0],200)
         self.assertNotIn('p1',app.leads)

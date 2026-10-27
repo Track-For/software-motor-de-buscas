@@ -227,6 +227,8 @@ def restaurar(d):
         if not all(k in b for k in ("estado", "criado_em", "lead_ids")):
             raise ValueError("Busca incompleta no backup.")
         p = b["parametros"]
+        if not isinstance(p.get('somente_sem_site', False), bool):
+            raise ValueError('Filtro sem site inválido no backup.')
         if b["estado"] not in ("rodando", "na_fila", "concluida", "cancelada", "erro") or not isinstance(b["criado_em"], (int, float)):
             raise ValueError("Estado da busca inválido.")
         if not isinstance(b["lead_ids"], list) or not all(isinstance(i, str) and i in d["leads"] for i in b["lead_ids"]):
@@ -397,12 +399,20 @@ def lead_de(row):
         "fechado": "permanently" in st or "permanentemente" in st,
     }
 
+def aceita_lead(busca, lead):
+    if not busca['parametros'].get('somente_sem_site', False):
+        return True
+    return not str(lead.get('site') or '').strip() and not str(leads.get(lead.get('id'), {}).get('site') or '').strip()
+
+
 def mesclar_leads(busca, novos):
     """Junta leads de uma busca na base. Lead que já existe: atualiza contato, mantém status,
     anotações e histórico. Devolve os ids na ordem da busca."""
     agora, ids = time.time(), []
     with lock:
         for n in novos:
+            if not aceita_lead(busca, n):
+                continue
             lid = n.get("id") or id_lead({"place_id": n.get("place_id"), "title": n.get("nome"), "address": n.get("endereco")})
             if lid in excluidos:
                 continue
@@ -566,14 +576,14 @@ def executar(b):
             concluidas.append(i)
             b.pop("job_atual", None)
             atualizar(b, parcial=len(linhas), linhas_parciais=linhas)
-            parciais = [lead_de(r) for r in linhas if not usa_grid or kit.in_bbox(r, bbox)]
+            parciais = [l for r in linhas if not usa_grid or kit.in_bbox(r, bbox) for l in [lead_de(r)] if aceita_lead(b, l)]
             novos_ids = b.setdefault("novos_ids", [])
             novos_ids.extend(l["id"] for l in parciais if l["id"] not in leads and l["id"] not in novos_ids)
             b["lead_ids"] = mesclar_leads(b, parciais)
             salvar_busca(b)
     if usa_grid:
         linhas = [r for r in linhas if kit.in_bbox(r, bbox)]
-    novos = [lead_de(r) for r in linhas]
+    novos = [l for r in linhas for l in [lead_de(r)] if aceita_lead(b, l)]
 
     enriquecidos = b.setdefault("enriquecidos", {})
     for l in novos:
@@ -801,6 +811,8 @@ class H(BaseHTTPRequestHandler):
             return self._envia(200, {"excluidos": excluir_leads(ids)})
         if path == "/api/buscas":
             d = self._corpo()
+            if not isinstance(d.get('somente_sem_site', False), bool):
+                raise ValueError('Filtro sem site inválido.')
             nichos = [n.strip() for n in re.split(r"[\n,;]", d.get("nichos", "")) if n.strip()][:10]
             if not nichos or not d.get("cidade") or not d.get("uf"):
                 return self._envia(400, {"erro": "Informe o nicho e a cidade."})
@@ -810,7 +822,7 @@ class H(BaseHTTPRequestHandler):
             b = {"id": bid, "criado_em": time.time(), "estado": "na_fila", "etapa": "Na fila",
                  "parametros": {"nichos": nichos, "cidade": d["cidade"].strip(), "uf": d["uf"].strip().upper(),
                                 "bairro": (d.get("bairro") or "").strip(), "tamanho": d["tamanho"],
-                                "redes": bool(d.get("redes", True))},
+                                "redes": bool(d.get("redes", True)), "somente_sem_site": d.get("somente_sem_site", False)},
                  "jobs_motor": [], "avisos": [], "lead_ids": [], "progresso": None}
             with fila_cond:
                 buscas[bid] = b
