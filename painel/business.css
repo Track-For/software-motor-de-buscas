@@ -7,4 +7,5 @@
 .nav{min-height:0;overflow-y:auto;flex:1}.side-foot{flex-shrink:0}.nav-sec{padding-top:16px}.nav a{padding-top:10px;padding-bottom:10px}
 .business-form{max-width:850px;padding:24px}.business-form h2{margin-bottom:18px}.form-error{color:var(--err);margin:12px 0}.stage-row{display:grid;grid-template-columns:minmax(120px,1fr) 56px auto;gap:10px;align-items:center;margin:10px 0}.stage-row .row{flex-wrap:wrap}
 .tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}.tags span{font-size:10px;background:var(--accent-soft);border-radius:6px;padding:2px 6px;color:var(--navy-3)}
+@media(max-width:600px){.topbar{gap:8px}.topbar .crumbs{min-width:0;flex:1;overflow:hidden}.topbar .crumbs>a,.topbar .crumbs>span{display:none}.topbar .crumbs b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.topbar .task-alert{margin-left:0;flex-shrink:0}.topbar>.sp{display:none}}
 @media(max-width:600px){.form-grid{grid-template-columns:1fr}.business-form{padding:18px}.task-alert{max-width:100px;font-size:10px}.topbar .gsearch{display:none}.stage-row{grid-template-columns:1fr 48px}.stage-row>.row{grid-column:1/-1}.crm-item .row{gap:5px}}

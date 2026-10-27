@@ -22,6 +22,9 @@ O visual usa superfícies translúcidas inspiradas em liquid glass, transições
 
 ## Gestão comercial
 
+- Na ficha do lead, **Oferta recomendada** sugere site, agente de WhatsApp com IA, ambos ou qualificar antes de oferecer. Mostra motivos, confiança e pontos a confirmar. A ausência de site no cadastro ou um endereço de rede social indica potencial para site, sem afirmar que a empresa não tenha um.
+- Preencha **Salvar qualificação** com a situação verificada do site, uso de WhatsApp, estimativa de mensagens diárias, perguntas repetitivas, agendamentos e perda de contatos. O agente é sugerido quando há sinal de uso do WhatsApp e uma dessas necessidades. Sem respostas, segmentos reconhecidos com WhatsApp podem receber uma indicação de potencial estimado, com confiança baixa e motivos explícitos; volume sozinho não determina a indicação. Respostas explícitas prevalecem sobre sinais do cadastro. “Necessidade confirmada” refere-se às respostas registradas por você, não a uma verificação externa.
+- A recomendação usa regras locais, sem consultar conversas ou auditar sites automaticamente. A qualificação permanece em novas buscas, backups e restauração da lixeira. Leads antigos funcionam com respostas inicialmente desconhecidas.
 - Na ficha do lead, cadastre oportunidades com serviço, valor, previsão e situação (aberta, ganha ou perdida), além de tarefas com prazo. Tarefas podem ser concluídas e reabertas em **Tarefas e retornos**.
 - Use **Editar contato** para corrigir dados; tags, prioridade e filtros salvos ajudam a organizar a base.
 - Em **Leads**, cadastre contatos manualmente ou importe CSV. Confira a prévia e o mapeamento antes de confirmar; linhas inválidas e duplicadas não são importadas. Limite: 5.000 linhas por arquivo.

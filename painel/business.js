@@ -12,6 +12,7 @@ async function salvarComercial(lid,path,method,body){
 }
 function comercialCampos(l){
   return `<div class="row section-gap"><button class="btn sm" id="editarContato">Editar contato</button></div><div id="contactEditor"></div>
+  <details class="crm-section" open><summary>Oferta recomendada</summary><div id="offerAdvice" aria-live="polite">Analisando os dados do cadastro…</div></details>
   <details class="crm-section"><summary>Tags e prioridade ${tagsLead(l)}</summary><form id="orgForm" class="crm-form"><div class="form-grid">${campo('tags','Tags (separadas por vírgula)',(l.tags||[]).join(', '),'text','maxlength="819"')}<label class="field">Prioridade<select class="in" name="prioridade">${Object.entries(PRIORIDADES).map(([v,n])=>`<option value="${v}" ${(l.prioridade||'normal')===v?'selected':''}>${n}</option>`).join('')}</select></label></div><button class="btn sm pri">Salvar organização</button></form></details>
   <details class="crm-section" open><summary>Oportunidades <span>${(l.oportunidades||[]).length}</span></summary>
     ${(l.oportunidades||[]).map(o=>`<div class="crm-item"><div><b>${esc(o.servico)}</b><small>${reais(o.valor_centavos)} · ${esc(OP_ESTADO[o.estado])} · ${dia(o.previsao)}</small></div><div class="row"><button class="btn sm" data-op-edit="${o.id}">Editar</button><button class="btn sm danger" data-item-delete="oportunidades/${o.id}" aria-label="Excluir oportunidade ${esc(o.servico)}">${ic('trash')}</button></div></div>`).join('')}
@@ -23,6 +24,7 @@ function comercialCampos(l){
   </details>`;
 }
 function conectaComercial(l){
+  carregarRecomendacao(l);
   $('#orgForm').onsubmit=async e=>{e.preventDefault();const d=dadosForm(e.currentTarget);d.tags=d.tags.split(',').map(t=>t.trim()).filter(Boolean);await salvarComercial(l.id,'organizacao','PATCH',d);toast('Organização salva');};
   $('#editarContato').onclick=()=>{
     $('#contactEditor').innerHTML=`<form id="contactForm" class="crm-form">${contatoInputs(l)}<button class="btn pri sm">Salvar contato</button></form>`;
@@ -40,6 +42,34 @@ function conectaComercial(l){
   $$('[data-task-edit]').forEach(b=>b.onclick=()=>{const t=l.tarefas.find(x=>x.id===b.dataset.taskEdit),f=$('#taskForm');f.elements.id.value=t.id;f.elements.titulo.value=t.titulo;f.elements.prazo.value=localDate(t.prazo);f.elements.titulo.focus();});
   $$('[data-task-toggle]').forEach(b=>b.onclick=async()=>{const t=l.tarefas.find(x=>x.id===b.dataset.taskToggle);await salvarComercial(l.id,'tarefas/'+t.id,'PATCH',{concluida:!t.concluida});toast(t.concluida?'Tarefa reaberta':'Tarefa concluída');});
   $$('[data-item-delete]').forEach(b=>b.onclick=async()=>{if(await confirmar('Remover registro','Remover este registro da ficha?','Remover'))await salvarComercial(l.id,b.dataset.itemDelete,'DELETE');});
+}
+async function carregarRecomendacao(l){
+  const target=$('#offerAdvice');
+  try{
+    const {qualificacao:q,recomendacao:r}=await api(`/api/leads/${encodeURIComponent(l.id)}/qualificacao`);
+    if(!target.isConnected)return;
+    const select=(name,label,options)=>`<label class="field">${label}<select class="in" name="${name}">${Object.entries(options).map(([v,n])=>`<option value="${v}" ${q[name]===v?'selected':''}>${n}</option>`).join('')}</select></label>`;
+    const yesno={desconhecido:'Ainda não sei',sim:'Sim',nao:'Não'};
+    const offers={site:'Site',whatsapp:'Agente de WhatsApp com IA',ambos:'Site + agente de WhatsApp com IA',investigar:'Qualificar antes de oferecer'};
+    target.innerHTML=`<div class="crm-item"><div><b>${offers[r.oferta]}</b><small>${esc(r.situacao)} · Confiança ${esc(r.confianca)}</small></div></div>
+      ${r.motivos.length?`<ul>${r.motivos.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}
+      ${r.confirmar.length?`<p class="hint">O que confirmar:</p><ul>${r.confirmar.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}
+      <p class="hint">Sugestão por regras, baseada no cadastro e nas respostas abaixo. Não verifica o site nem as conversas automaticamente. “Confirmada” significa informada por você.</p>
+      <form id="qualificationForm" class="crm-form"><div class="form-grid">
+      ${select('site','Situação do site (verificada por você)',{desconhecido:'Ainda não verifiquei',ausente:'Não possui site próprio',problemas:'Possui problemas verificados',adequado:'Site adequado'})}
+      ${select('usa_whatsapp','Atende pelo WhatsApp?',yesno)}
+      ${campo('mensagens_dia','Mensagens por dia (estimativa informada)',q.mensagens_dia??'','number','min="0" max="1000000" step="1" placeholder="Ainda não sei"')}
+      ${select('repetitivas','Recebe perguntas repetitivas?',yesno)}
+      ${select('agendamentos','Recebe solicitações de agendamento?',yesno)}
+      ${select('perde_contatos','Perde contatos por demora ou fora do horário?',yesno)}
+      </div><button class="btn pri sm" type="submit">Salvar qualificação</button><p class="form-error" role="alert" hidden></p></form>`;
+    $('#qualificationForm',target).onsubmit=async e=>{
+      e.preventDefault();const form=e.currentTarget,d=dadosForm(form),button=form.querySelector('button'),error=form.querySelector('.form-error');
+      d.mensagens_dia=d.mensagens_dia===''?null:Number(d.mensagens_dia);button.disabled=true;error.hidden=true;
+      try{await salvarComercial(l.id,'qualificacao','PATCH',d);toast('Qualificação salva');}
+      catch(err){if(form.isConnected){button.disabled=false;error.textContent=err.message;error.hidden=false;}}
+    };
+  }catch(err){if(target.isConnected){target.textContent=err.message;const retry=document.createElement('button');retry.className='btn sm';retry.textContent='Tentar novamente';retry.onclick=()=>carregarRecomendacao(l);target.append(retry);}}
 }
 function todasTarefas(){
   return S.leads.flatMap(l=>[

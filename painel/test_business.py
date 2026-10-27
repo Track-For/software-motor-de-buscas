@@ -11,6 +11,62 @@ class Business(unittest.TestCase):
     tearDown = fixture.CRM.tearDown
     req = fixture.CRM.req
 
+    def test_offer_qualification_rules_and_persistence(self):
+        path = '/api/leads/p1/qualificacao'
+        app.leads['p1']['site'] = ''
+        app.leads['p1']['whatsapp'] = '5541999999999'
+        app.persistir()
+        result = self.req(path)[1]['recomendacao']
+        self.assertEqual(result['oferta'], 'site')
+        self.assertEqual(result['confianca'], 'média')
+        self.assertEqual(self.req(path, 'PATCH', {'mensagens_dia': True})[0], 400)
+        self.assertEqual(self.req(path, 'PATCH', {'site': 'inventado'})[0], 400)
+        self.assertEqual(self.req(path, 'PATCH', {'site': 'ausente', 'usa_whatsapp': 'sim', 'repetitivas': 'sim', 'mensagens_dia': 30})[0], 200)
+        result = self.req(path)[1]['recomendacao']
+        self.assertEqual((result['oferta'], result['confianca']), ('ambos', 'alta'))
+        app.mesclar_leads(self.b, [app.lead_de(self.row)])
+        app.persistir()
+        self.assertEqual(app.store.read('leads')['p1']['qualificacao']['mensagens_dia'], 30)
+        saved = app.snapshot()
+        bad = copy.deepcopy(saved); bad['leads']['p1']['qualificacao']['mensagens_dia'] = -1
+        self.assertEqual(self.req('/api/restaurar', 'POST', bad)[0], 400)
+        self.req('/api/leads/p1', 'DELETE')
+        self.req('/api/lixeira/p1/restaurar', 'POST', {})
+        self.assertEqual(self.req(path)[1]['qualificacao']['mensagens_dia'], 30)
+        self.assertEqual(self.req('/api/restaurar', 'POST', saved)[0], 200)
+        self.req(path, 'PATCH', {'site': 'adequado'})
+        self.assertEqual(self.req(path)[1]['recomendacao']['oferta'], 'whatsapp')
+        self.req(path, 'PATCH', {'usa_whatsapp': 'nao'})
+        self.assertEqual(self.req(path)[1]['recomendacao']['oferta'], 'investigar')
+
+    def test_offer_social_domain_and_unknown_volume(self):
+        lead = {'site': 'https://www.instagram.com/example', 'whatsapp': ''}
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'site')
+        lead['site'] = 'https://instagram.com.example.org'
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'investigar')
+        lead['qualificacao'] = {'mensagens_dia': 1000, 'usa_whatsapp': 'sim'}
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'investigar')
+
+    def test_offer_segment_is_a_hypothesis_and_answers_override_it(self):
+        lead = {'site': 'https://example.org', 'whatsapp': '5541999999999', 'categoria': 'Clínica odontológica'}
+        result = app.business.recomendar(lead)
+        self.assertEqual((result['oferta'], result['confianca']), ('whatsapp', 'baixa'))
+        self.assertEqual(result['situacao'], 'Potencial estimado pelo segmento')
+        lead['site'] = ''
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'ambos')
+        lead['qualificacao'] = {'usa_whatsapp': 'nao'}
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'site')
+        lead['qualificacao'] = {'repetitivas': 'nao', 'agendamentos': 'nao', 'perde_contatos': 'nao'}
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'site')
+        lead['qualificacao'] = {'mensagens_dia': 0}
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'site')
+        lead['qualificacao'] = {}
+        lead['whatsapp'] = ''
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'site')
+        lead['whatsapp'] = '5541999999999'
+        lead['categoria'] = 'Categoria não reconhecida'
+        self.assertEqual(app.business.recomendar(lead)['oferta'], 'site')
+
     def test_opportunities_money_validation_update_and_merge(self):
         path = '/api/leads/p1/oportunidades'
         self.assertEqual(self.req(path, 'POST', {'servico': 'Site', 'valor': '100.001'})[0], 400)

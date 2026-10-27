@@ -203,9 +203,89 @@ def validar_filtro(d):
     return d
 
 
+def qualificacao(d):
+    if not isinstance(d, dict):
+        raise ValueError('Qualificação inválida.')
+    choices = {'site': ('desconhecido', 'ausente', 'problemas', 'adequado'),
+               'usa_whatsapp': ('desconhecido', 'sim', 'nao'),
+               'repetitivas': ('desconhecido', 'sim', 'nao'),
+               'agendamentos': ('desconhecido', 'sim', 'nao'),
+               'perde_contatos': ('desconhecido', 'sim', 'nao')}
+    if set(d) - (set(choices) | {'mensagens_dia'}):
+        raise ValueError('Campo de qualificação inválido.')
+    result = {}
+    for key, options in choices.items():
+        value = d.get(key, 'desconhecido')
+        if value not in options:
+            raise ValueError('Resposta de qualificação inválida.')
+        result[key] = value
+    count = d.get('mensagens_dia')
+    if count is not None and (type(count) is not int or not 0 <= count <= 1000000):
+        raise ValueError('Informe um número inteiro de mensagens por dia, ou deixe vazio.')
+    result['mensagens_dia'] = count
+    return result
+
+
+def recomendar(lead):
+    q = qualificacao(lead.get('qualificacao', {}))
+    reasons, pending = [], []
+    site = q['site'] in ('ausente', 'problemas')
+    site_confirmed = site
+    if site:
+        reasons.append('Informado na qualificação: ' + ('não possui site próprio.' if q['site'] == 'ausente' else 'site apresenta problemas verificados.'))
+    elif q['site'] == 'desconhecido':
+        url = lead.get('site', '')
+        host = (urllib.parse.urlparse(url if '://' in url else '//'+url).hostname or '').lower()
+        social = any(host == domain or host.endswith('.'+domain) for domain in ('instagram.com', 'facebook.com', 'wa.me', 'whatsapp.com', 'linktr.ee'))
+        if not url or social:
+            site = True
+            reasons.append('O cadastro não informa site próprio.' if not url else 'O endereço cadastrado leva a rede social, WhatsApp ou página de links.')
+            pending.append('Confirmar se a empresa já possui site próprio.')
+        else:
+            pending.append('Verificar a qualidade do site; o painel não faz auditoria automática.')
+    uses = q['usa_whatsapp'] == 'sim' or (q['usa_whatsapp'] == 'desconhecido' and bool(lead.get('whatsapp')))
+    needs = [label for field, label in [('repetitivas', 'perguntas repetitivas'), ('agendamentos', 'solicitações de agendamento'), ('perde_contatos', 'perda de contatos por demora ou fora do horário')] if q[field] == 'sim']
+    agent = uses and bool(needs)
+    agent_confirmed = agent and q['usa_whatsapp'] == 'sim'
+    category = normal(lead.get('categoria', ''))
+    # Heurística de prospecção, não comprovação de demanda ou de volume.
+    segment = next((label for pattern, label in (
+        (r'psicolog|dentist|odont|clinic|terapeut|medic|fisioterap', 'consultas e agendamentos'),
+        (r'advog|juridic|contab', 'triagem inicial e marcação de atendimento'),
+        (r'escola|idioma|ingles|curso', 'informações sobre cursos, horários e matrículas'),
+        (r'estetic|beleza|salao|barbear|cabeleir', 'serviços, preços e agendamentos'),
+        (r'oficina|mecanic|assistencia tecnica', 'pedidos de orçamento e acompanhamento'),
+        (r'hotel|pousada', 'informações de hospedagem e reservas'),
+    ) if re.search(pattern, category)), None)
+    inferred = (not agent and uses and segment is not None
+                and any(q[k] == 'desconhecido' for k in ('repetitivas', 'agendamentos', 'perde_contatos'))
+                and q['mensagens_dia'] != 0)
+    if inferred:
+        agent = True
+        reasons.append(f"Hipótese pelo segmento cadastrado ({lead.get('categoria', '')}): avaliar automação de {segment}.")
+        reasons.append('Uso de WhatsApp informado na qualificação.' if q['usa_whatsapp'] == 'sim' else 'Há um WhatsApp no cadastro; o uso pela empresa ainda precisa ser confirmado.')
+        pending.append('Validar volume e rotina de atendimento. O segmento não comprova demanda, demora ou perda de contatos.')
+    elif agent:
+        reasons.append('Informado na qualificação: ' + ', '.join(needs) + '.')
+        if not agent_confirmed:
+            pending.append('Confirmar o uso do WhatsApp; há um número no cadastro.')
+    elif uses:
+        pending.append('WhatsApp identificado: investigar perguntas repetitivas, agendamentos e perda de contatos antes de oferecer IA.')
+    else:
+        pending.append('Confirmar se atende pelo WhatsApp antes de avaliar um agente de IA.')
+    if q['mensagens_dia'] is not None:
+        reasons.append(f"Volume informado: {q['mensagens_dia']} mensagens por dia; volume isolado não confirma necessidade de IA.")
+    offer = 'ambos' if site and agent else 'site' if site else 'whatsapp' if agent else 'investigar'
+    confirmed = (not site or site_confirmed) and (not agent or agent_confirmed) and offer != 'investigar'
+    return dict(oferta=offer, confianca='alta' if confirmed else 'baixa' if inferred else 'média' if offer != 'investigar' else 'baixa',
+                situacao='Potencial estimado pelo segmento' if inferred else 'Necessidade confirmada na qualificação' if confirmed else 'Potencial para oferecer' if offer != 'investigar' else 'Informações insuficientes',
+                motivos=reasons, confirmar=pending)
+
+
 def validar_comercial(lead):
     """Validação também usada na restauração, antes de alterar a base."""
     organizacao({'tags': lead.get('tags', []), 'prioridade': lead.get('prioridade', 'normal')})
+    qualificacao(lead.get('qualificacao', {}))
     for group in ('oportunidades', 'tarefas'):
         rows = lead.get(group, [])
         if not isinstance(rows, list) or len(rows) > 1000:
@@ -279,6 +359,22 @@ def relatorio(app, query):
 def dispatch(h, app):
     """Retorna True quando a rota foi atendida, sob o mesmo lock da persistência."""
     path, method = h._rota(), h.command
+    m = re.fullmatch(r'/api/leads/([\w-]+)/qualificacao', path)
+    if m and method in ('GET', 'PATCH'):
+        with app.lock:
+            lead = app.leads.get(m[1])
+            if lead is None:
+                h._envia(404, {'erro': 'Lead não encontrado.'}); return True
+            if method == 'PATCH':
+                d = h._corpo()
+                if not isinstance(d, dict):
+                    raise ValueError('Qualificação inválida.')
+                lead['qualificacao'] = qualificacao(lead.get('qualificacao', {}) | d)
+                app.registrar(lead, 'qualificacao', 'Qualificação comercial atualizada')
+                app.persistir(); h._envia(200, lead)
+            else:
+                h._envia(200, {'qualificacao': qualificacao(lead.get('qualificacao', {})), 'recomendacao': recomendar(lead)})
+        return True
     if path == '/api/relatorios' and method == 'GET':
         with app.lock:
             h._envia(200, relatorio(app, urllib.parse.parse_qs(urllib.parse.urlparse(h.path).query)))
