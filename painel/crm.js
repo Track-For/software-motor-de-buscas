@@ -19,7 +19,7 @@ async function apagaBuscas(ids){
   if(!ids.length || apagandoBuscas)return;
   apagandoBuscas=true;
   try{
-    if(!await confirmar('Excluir buscas',`Excluir ${ids.length} busca(s) e todos os leads encontrados nelas? Isso inclui status, anotações e histórico, mesmo dos leads presentes em outras buscas. Esses leads não voltarão em novas buscas. Um backup será salvo automaticamente.`,'Excluir buscas e leads'))return;
+    if(!await confirmar('Excluir buscas',`Excluir ${ids.length} busca(s) e retirar todos os seus leads da base ativa, inclusive os presentes em outras buscas? Os leads irão para a Lixeira com histórico, tarefas e oportunidades. Buscas excluídas não são recuperadas pela lixeira. Um backup será salvo automaticamente.`,'Excluir buscas e leads'))return;
     let total=0;
     try{
       for(const id of ids){
@@ -40,7 +40,7 @@ async function apagaBuscas(ids){
 async function apagaLeads(ids){
   if(!ids.length)return;
   const texto=ids.length===1?`Excluir “${S.map[ids[0]]?.nome||'este lead'}” da base?`:`Excluir os ${fN(ids.length)} leads selecionados da base?`;
-  if(!await confirmar('Excluir leads',texto+' Os vínculos com as extrações e o histórico desses leads serão removidos. Eles não voltarão em novas buscas. Um backup completo será salvo automaticamente.','Excluir leads'))return;
+  if(!await confirmar('Excluir leads',texto+' Os leads irão para a Lixeira com histórico, tarefas e oportunidades preservados. Enquanto excluídos, não voltarão em novas buscas. Um backup completo será salvo automaticamente.','Excluir leads'))return;
   try{
     const r=await api('/api/leads/excluir',{method:'POST',body:{ids}});
     if(leadAberto&&ids.includes(leadAberto.id))fechaLead();
@@ -114,9 +114,9 @@ VIEWS.config=async()=>{
   $('#backupList').innerHTML=backups.length?backups.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join(''):'<option value="">Nenhuma cópia local</option>';
 };
 
-(async()=>{
+async function iniciarCRM(){
   await Promise.all([carregaBuscas(),carregaLeads(),status(),api('/api/config').then(c=>S.config=c).catch(err=>mostraErro('Não foi possível carregar as mensagens. '+err.message))]);
   render();
   let ticking=false;setInterval(async()=>{if(ticking)return;ticking=true;try{await tick();}finally{ticking=false;}},3000);
   let checking=false;setInterval(async()=>{if(checking)return;checking=true;try{await status();}finally{checking=false;}},15000);
-})();
+}

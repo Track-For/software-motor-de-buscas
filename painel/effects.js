@@ -121,6 +121,22 @@
   window.addEventListener('hashchange',queue);
   // A single delegated hover context; no listeners accumulated by table redraws.
   const mm=gs?.matchMedia();
+  // One frame-batched reflection for the card under the pointer, including dynamic cards.
+  let reflectionFrame=0,reflectionTarget=null,reflectionX=0,reflectionY=0;
+  function reflect(e){
+    if(!fine.matches||reduced.matches||e.pointerType==='touch')return;
+    reflectionTarget=e.target.closest('.card,.hero,.kc');
+    if(!reflectionTarget)return;
+    reflectionX=e.clientX;reflectionY=e.clientY;
+    if(!reflectionFrame)reflectionFrame=requestAnimationFrame(()=>{
+      reflectionFrame=0;
+      if(!reflectionTarget?.isConnected)return;
+      const rect=reflectionTarget.getBoundingClientRect();
+      reflectionTarget.style.setProperty('--glass-x',`${reflectionX-rect.left}px`);
+      reflectionTarget.style.setProperty('--glass-y',`${reflectionY-rect.top}px`);
+    });
+  }
+  document.addEventListener('pointermove',reflect,{passive:true});
   mm?.add('(prefers-reduced-motion: no-preference) and (pointer: fine)',context=>{
     context.add('hover',(el,up)=>gs.to(el,{y:up?-2:0,duration:.22,ease:'power2.out',overwrite:true}));
     const over=e=>{const b=e.target.closest('.btn');if(b&&!b.disabled&&!b.contains(e.relatedTarget))context.hover(b,true);};
@@ -128,6 +144,6 @@
     document.addEventListener('pointerover',over);document.addEventListener('pointerout',out);
     return ()=>{document.removeEventListener('pointerover',over);document.removeEventListener('pointerout',out);};
   });
-  window.addEventListener('pagehide',()=>{liquid?.destroy();liquid=null;contexts.forEach(c=>c.revert());contexts=[];mm?.revert();observer.disconnect();},{once:true});
+  window.addEventListener('pagehide',()=>{cancelAnimationFrame(reflectionFrame);document.removeEventListener('pointermove',reflect);liquid?.destroy();liquid=null;contexts.forEach(c=>c.revert());contexts=[];mm?.revert();observer.disconnect();},{once:true});
   refresh();
 })();

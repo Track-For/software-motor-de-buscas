@@ -4,7 +4,7 @@ import tempfile
 import time
 
 os.environ['PAINEL_DATA_DIR'] = tempfile.mkdtemp(prefix='prospecta-qa-')
-os.environ['PAINEL_PORT'] = '8091'
+os.environ['PAINEL_PORT'] = os.environ.get('QA_PORT', '8091')
 import server as app
 
 app.carregar()
@@ -22,5 +22,5 @@ for i,l in enumerate(app.leads.values()):
     if i%2: app.registrar(l,'whatsapp','')
 app.persistir()
 app.motor_ok=lambda:True
-print('QA isolado: http://127.0.0.1:8091',flush=True)
-app.ThreadingHTTPServer(('127.0.0.1',8091),app.H).serve_forever()
+print(f'QA isolado: http://127.0.0.1:{app.PORT}',flush=True)
+app.ThreadingHTTPServer(('127.0.0.1',app.PORT),app.H).serve_forever()

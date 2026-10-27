@@ -20,13 +20,22 @@ O visual usa superfícies translúcidas inspiradas em liquid glass, transições
 4. Na ficha, escolha **Próximo contato** e salve. A página **Próximos contatos** separa retornos pendentes dos futuros. Leads fechados ou descartados saem dessa agenda.
 5. Use **Concluir retorno** após atender o lembrete, ou agende uma nova data. O motivo da perda pode ser registrado na mesma ficha.
 
+## Gestão comercial
+
+- Na ficha do lead, cadastre oportunidades com serviço, valor, previsão e situação (aberta, ganha ou perdida), além de tarefas com prazo. Tarefas podem ser concluídas e reabertas em **Tarefas e retornos**.
+- Use **Editar contato** para corrigir dados; tags, prioridade e filtros salvos ajudam a organizar a base.
+- Em **Leads**, cadastre contatos manualmente ou importe CSV. Confira a prévia e o mapeamento antes de confirmar; linhas inválidas e duplicadas não são importadas. Limite: 5.000 linhas por arquivo.
+- Em **Funil → Configurar etapas**, crie, renomeie e ordene etapas. Ao remover uma etapa com leads, escolha o destino deles.
+- **Relatórios** reúne atividade e receita por período e origem, com exportação CSV. O valor em aberto representa a carteira atual, independentemente do período. Leads na lixeira não entram nos resultados.
+
 ## Excluir leads
 
 - **Individual:** ficha → **Excluir este lead**.
 - **Em lote:** selecione as caixas na tabela → **Excluir leads**.
 - A seleção geral seleciona somente a página visível. As seleções permanecem ao mudar de página.
 - Um diálogo confirma a quantidade e a ação. Cancelar o diálogo não altera dados.
-- A exclusão remove o lead, seu histórico e os vínculos com todas as extrações. O histórico das extrações permanece.
+- A exclusão move o lead para a **Lixeira** e remove seus vínculos ativos com as extrações. A restauração individual recupera histórico, tarefas, oportunidades e vínculos com buscas ainda existentes; buscas excluídas não são recriadas.
+- **Excluir definitivamente** remove o registro da lixeira, mas mantém o bloqueio contra reaparecimento em buscas. Backups anteriores ainda podem recuperá-lo.
 - IDs excluídos ficam numa lista local de exclusão para impedir reaparecimento em buscas atuais ou futuras. Restaurar um backup anterior recupera os leads e a lista de exclusão daquele momento.
 - Antes da exclusão, o painel salva um backup completo em `painel/dados/backups/`.
 
@@ -69,6 +78,7 @@ Há uma janela entre o motor aceitar um job e o painel persistir seu ID; uma int
 ```powershell
 python scripts/test_scrape.py
 python painel/test_server.py
+python painel/test_business.py
 ```
 
 Os testes de CRM usam pastas temporárias e um servidor HTTP local; não acessam dados reais nem o Google.
@@ -82,3 +92,14 @@ node visual-qa.mjs
 ```
 
 O servidor de QA usa dados fictícios isolados na porta 8091. `PLAYWRIGHT_MODULE` pode apontar para uma instalação existente do Playwright. Capturas ficam em `.qa/`, ignorada pelo Git.
+
+Para validar os fluxos comerciais, inicie outro servidor isolado e execute o teste com Playwright e Edge disponíveis:
+
+```powershell
+$env:QA_PORT = '8092'
+python painel/qa_server.py
+# Em outro terminal:
+node business-qa.cjs
+```
+
+O teste comercial cobre cadastro, oportunidades, tarefas, filtros salvos, importação CSV, etapas, relatórios e restauração da lixeira, além da largura da tela no celular. Reinicie o servidor de QA para começar com uma base fictícia limpa.

@@ -278,6 +278,7 @@ table.t{width:100%;border-collapse:collapse}
 </style>
 <link rel="stylesheet" href="/theme.css">
 <link rel="stylesheet" href="/glass.css">
+<link rel="stylesheet" href="/business.css">
 </head>
 <body>
 <a class="skip-link" href="#page">Pular para o conteúdo</a>
@@ -367,7 +368,7 @@ const ic = (n, cls="i") => `<svg class="${cls}" viewBox="0 0 24 24">${I[n]}</svg
 const STATUS = [["novo","Novo"],["contatado","Contatado"],["respondeu","Respondeu"],["reuniao","Reunião marcada"],["fechado","Fechou negócio"],["descartado","Descartado"]];
 const NOME_ST = Object.fromEntries(STATUS);
 const COR_ST = {novo:"var(--muted)",contatado:"var(--blue)",respondeu:"var(--warn)",reuniao:"var(--violet)",fechado:"var(--green)",descartado:"var(--err)"};
-const pillSt = s => `<span class="pill s-${s}">${NOME_ST[s]||s}</span>`;
+const pillSt = s => `<span class="pill s-${esc(s)}" style="color:${COR_ST[s]||'var(--muted)'}">${esc(NOME_ST[s]||s)}</span>`;
 const TAM = {rapida:["Rápida","~20","2 min"], padrao:["Padrão","60–120","5–10 min"], completa:["Completa","até 120","10–15 min"], cidade:["Cidade inteira","200–600","30–60 min"]};
 const ESTADO = {na_fila:"Na fila", rodando:"Rodando", concluida:"Concluída", erro:"Erro", cancelada:"Cancelada"};
 
@@ -389,9 +390,9 @@ function upsertLead(l){ const p = {...l, n_hist:(l.historico||[]).length}; delet
 
 // ═════════════ navegação ═════════════
 const NAV = [
-  ["sec","Visão geral"], ["inicio","Visão geral","home"], ["agenda","Próximos contatos","hist"],
+  ["sec","Visão geral"], ["inicio","Visão geral","home"], ["agenda","Tarefas e retornos","hist"], ["oportunidades","Oportunidades","trend"], ["relatorios","Relatórios","trend"],
   ["sec","Prospecção"], ["nova","Nova busca","plus"], ["buscas","Buscas","hist"], ["leads","Leads","users"], ["funil","Funil de vendas","kanban"],
-  ["sec","Ajustes"], ["mensagens","Mensagens","msg"], ["config","Configurações","gear"],
+  ["sec","Ajustes"], ["mensagens","Mensagens","msg"], ["config","Configurações","gear"], ["lixeira","Lixeira","trash"],
 ];
 function rota(){ const h = location.hash.replace(/^#\/?/,"") || "inicio"; const [v, ...r] = h.split("/"); return {v, arg:r.join("/")}; }
 function renderNav(){
@@ -433,8 +434,8 @@ VIEWS.inicio = async () => {
   }
   const st = d.por_status, trab = d.total - st.novo, F = primeira ? "fade" : "";
   const kpi = (lab, n, sub, icn, cor, bg) => `<div class="card kpi"><div class="ico" style="background:${bg};color:${cor}">${ic(icn)}</div><div class="l">${lab}</div><div class="n num">${n}</div><div class="s">${sub}</div></div>`;
-  const etapas = ["contatado","respondeu","reuniao","fechado"];
-  const acum = s => etapas.slice(etapas.indexOf(s)).reduce((a,k)=>a+st[k],0); // quantos chegaram pelo menos até esta etapa
+  const etapas = STATUS.map(s=>s[0]).filter(s=>!["novo","descartado"].includes(s));
+  const acum = s => etapas.slice(etapas.indexOf(s)).reduce((a,k)=>a+(st[k]||0),0); // quantos chegaram pelo menos até esta etapa
   const hb = arr => arr.length ? `<div class="hb">${arr.map(([k,n])=>`<div class="hb-r"><div><div class="lab"><span>${esc(k)}</span></div><div class="bar"><i style="width:${n/arr[0][1]*100}%"></i></div></div><div class="num sm" style="text-align:right">${fN(n)}</div></div>`).join("")}</div>` : `<div class="muted sm">Sem dados.</div>`;
   const icEv = {whatsapp:"wa",status:"flag",nota:"note",ligacao:"phone",email:"mail"};
   $("#ini").innerHTML = blocoAtivas + `
@@ -448,7 +449,7 @@ VIEWS.inicio = async () => {
       <div class="card ${F}"><div class="card-h"><h3>Funil de vendas</h3><div class="sp"></div><a class="sm" href="#/funil">Ver quadro →</a></div>
         <div class="card-b"><div class="fun">
           <div class="fun-r"><span>Leads na base</span><div class="fun-b"><i style="width:100%;background:var(--muted);opacity:.3"></i></div><b class="num" style="text-align:right">${fN(d.total)}</b></div>
-          ${etapas.map(s=>`<div class="fun-r"><span>${NOME_ST[s]}</span><div class="fun-b"><i style="width:${acum(s)/d.total*100}%;background:${COR_ST[s]}"></i></div><div style="text-align:right"><b class="num">${fN(acum(s))}</b><div class="xs muted">${fPct(acum(s),d.total)}</div></div></div>`).join("")}
+          ${etapas.map(s=>`<div class="fun-r"><span>${esc(NOME_ST[s])}</span><div class="fun-b"><i style="width:${acum(s)/d.total*100}%;background:${COR_ST[s]}"></i></div><div style="text-align:right"><b class="num">${fN(acum(s))}</b><div class="xs muted">${fPct(acum(s),d.total)}</div></div></div>`).join("")}
         </div>
         <div class="sep"></div>
         <div class="row sm" style="flex-wrap:wrap;gap:18px"><span class="muted">Ainda não contatados: <b style="color:var(--ink)">${fN(st.novo)}</b></span><span class="muted">Descartados: <b style="color:var(--ink)">${fN(st.descartado)}</b></span><span class="muted">Sem site: <b style="color:var(--warn)">${fN(d.sem_site)}</b></span><span class="muted">Com e-mail: <b style="color:var(--ink)">${fN(d.com_email)}</b></span></div>
@@ -648,6 +649,7 @@ function filtra(rows){
   return rows.filter(l => (!q || semAc(`${l.nome} ${l.categoria} ${l.bairro} ${l.cidade} ${l.obs} ${l.telefone}`).includes(q)) &&
     (!FL.wa||l.whatsapp) && (!FL.email||l.email) && (!FL.semsite||!l.site) && (!FL.nota4||l.nota>=4) &&
     (!FL.status||l.status===FL.status) && (!FL.cidade||l.cidade===FL.cidade) && (!FL.categoria||l.categoria===FL.categoria) &&
+    (!FL.tag||(l.tags||[]).includes(FL.tag)) && (!FL.prioridade||(l.prioridade||"normal")===FL.prioridade) && (!FL.busca||(l.buscas||[]).includes(FL.busca)) &&
     (!FL.ocultarFechados||!l.fechado) && (!FL.ocultarDescartados||l.status!=="descartado"));
 }
 function ordena(rows){ const {c,d} = TB.ordem;
@@ -668,9 +670,10 @@ function tabelaLeads(el, fonte, chave, comAcoesTopo){
     el.innerHTML = `
       <div class="tbar">
         <input class="in" type="search" id="fq" placeholder="Filtrar por nome, bairro, telefone…" value="${esc(FL.texto)}">
-        <select class="in" id="fst"><option value="">Todos os status</option>${STATUS.map(([v,n])=>`<option value="${v}" ${FL.status===v?"selected":""}>${n}</option>`).join("")}</select>
+        <select class="in" id="fst"><option value="">Todos os status</option>${STATUS.map(([v,n])=>`<option value="${v}" ${FL.status===v?"selected":""}>${esc(n)}</option>`).join("")}</select>
         <select class="in" id="fcid"><option value="">Todas as cidades</option>${opts("cidade").map(c=>`<option ${FL.cidade===c?"selected":""}>${esc(c)}</option>`).join("")}</select>
         <select class="in" id="fcat"><option value="">Todas as categorias</option>${opts("categoria").map(c=>`<option ${FL.categoria===c?"selected":""}>${esc(c)}</option>`).join("")}</select>
+        ${filtrosComerciais()}
         <span class="chip ${FL.wa?"on":""}" data-f="wa">${ic("wa")}WhatsApp</span>
         <span class="chip ${FL.email?"on":""}" data-f="email">${ic("mail")}E-mail</span>
         <span class="chip ${FL.semsite?"on":""}" data-f="semsite" title="Ótimo para quem vende site, tráfego ou marketing">Sem site</span>
@@ -678,13 +681,13 @@ function tabelaLeads(el, fonte, chave, comAcoesTopo){
         <span class="chip ${FL.ocultarDescartados?"on":""}" data-f="ocultarDescartados">Ocultar descartados</span>
       </div>
       ${TB.sel.size?`<div class="bulk">${fN(TB.sel.size)} selecionado${TB.sel.size>1?"s":""}
-        <select class="in" id="bulkSt" style="padding:5px 26px 5px 10px"><option value="">Mudar status para…</option>${STATUS.map(([v,n])=>`<option value="${v}">${n}</option>`).join("")}</select>
+        <select class="in" id="bulkSt" style="padding:5px 26px 5px 10px"><option value="">Mudar status para…</option>${STATUS.map(([v,n])=>`<option value="${v}">${esc(n)}</option>`).join("")}</select>
         <button class="btn sm" id="bulkExp">${ic("down")}Exportar seleção</button><button class="btn sm danger" id="bulkDel">${ic("trash")}Excluir leads</button><button class="btn sm ghost" id="bulkClr">Limpar seleção</button></div>`:""}
       <div class="twrap"><table class="t"><thead><tr><th class="chk"><input type="checkbox" id="selAll" ${todosSel?"checked":""}></th>
         ${th("nome","Empresa")}${th("bairro","Local")}${th("telefone","Telefone")}${th("contato","Canais")}${th("nota","Nota")}${th("status","Status")}${th("atualizado_em","Atualizado")}</tr></thead>
       <tbody>${vis.map(l=>`<tr data-id="${esc(l.id)}" class="${TB.sel.has(l.id)?"sel":""}">
         <td class="chk"><input type="checkbox" data-sel="${esc(l.id)}" ${TB.sel.has(l.id)?"checked":""}></td>
-        <td><div class="lead-n">${esc(l.nome)}</div><div class="lead-c">${esc(l.categoria)}${l.fechado?' · <b style="color:var(--err)">fechado</b>':""}</div></td>
+        <td><div class="lead-n">${esc(l.nome)}</div>${tagsLead(l)}<div class="lead-c">${esc(l.categoria)}${l.fechado?' · <b style="color:var(--err)">fechado</b>':""}</div></td>
         <td><div class="sm">${esc(l.bairro||"—")}</div><div class="lead-c">${esc([l.cidade,l.uf].filter(Boolean).join(" - "))}</div></td>
         <td class="num sm" style="white-space:nowrap">${esc(l.telefone||"—")}</td>
         <td><div class="ok-ico"><span class="wa ${l.whatsapp?"on":""}" title="WhatsApp">${ic("wa")}</span><span class="em ${l.email?"on":""}" title="E-mail">${ic("mail")}</span><span class="ws ${l.site?"on":""}" title="Site">${ic("globe")}</span><span class="ig ${l.instagram?"on":""}" title="Instagram">${ic("ig")}</span></div></td>
@@ -695,6 +698,7 @@ function tabelaLeads(el, fonte, chave, comAcoesTopo){
       ${rows.length?`<div class="pag"><span>${fN(TB.pag*POR_PAG+1)}–${fN(TB.pag*POR_PAG+vis.length)} de ${fN(rows.length)} leads${rows.length!==todos.length?` (filtrados de ${fN(todos.length)})`:""}</span>
         ${pags>1?`<span class="row"><button class="btn sm" id="pA" ${TB.pag?"":"disabled"}>← Anterior</button><span>Página ${TB.pag+1} de ${pags}</span><button class="btn sm" id="pP" ${TB.pag<pags-1?"":"disabled"}>Próxima →</button></span>`:""}</div>`:""}`;
     const salva = () => { ls.set("fl",FL); TB.pag=0; draw(); };
+    conectaFiltros(el, salva);
     $("#fq",el).oninput = e => { FL.texto=e.target.value; ls.set("fl",FL); TB.pag=0; clearTimeout(draw.t); draw.t=setTimeout(()=>{ const pos=e.target.selectionStart; draw(); const f=$("#fq",el); f.focus(); f.setSelectionRange(pos,pos); },200); };
     $("#fst",el).onchange = e => { FL.status=e.target.value; salva(); };
     $("#fcid",el).onchange = e => { FL.cidade=e.target.value; salva(); };
@@ -755,7 +759,7 @@ function desenhaLead(){
         ${l.maps?`<a class="btn" href="${esc(l.maps)}" target="_blank" rel="noopener">${ic("pin")}Maps</a>`:`<button class="btn" disabled>${ic("pin")}Maps</button>`}
       </div>
       <div class="sec-t">Etapa do funil</div>
-      <div class="stsel" id="stsel">${STATUS.map(([v,n])=>`<button data-st="${v}" class="${l.status===v?"on s-"+v:""}">${n}</button>`).join("")}</div>
+      <div class="stsel" id="stsel">${STATUS.map(([v,n])=>`<button data-st="${v}" class="${l.status===v?"on s-"+v:""}">${esc(n)}</button>`).join("")}</div>
       <div class="sec-t">Dados</div>
       <dl class="info">
         <dt>Telefone</dt><dd class="num">${esc(l.telefone||"—")} ${l.tel_tipo?`<span class="pill nodot">${l.tel_tipo}</span>`:""}</dd>
@@ -770,6 +774,7 @@ function desenhaLead(){
         <dt>Cidade</dt><dd>${esc([l.cidade,l.uf].filter(Boolean).join(" - ")||"—")}${l.cep?` · CEP ${esc(l.cep)}`:""}</dd>
         <dt>Origem</dt><dd>${(l.buscas||[]).map(bid=>{ const b=S.buscas.find(x=>x.id===bid); return b?`<a href="#/buscas/${bid}">${esc(b.parametros.nichos.join(", "))}</a>`:""; }).filter(Boolean).join(", ")||esc(l.nicho||"—")}</dd>
       </dl>
+      ${comercialCampos(l)}
       <div class="sec-t">Anotações e histórico</div>
       ${agendaCampos(l)}
       <textarea class="in" id="nota" rows="2" placeholder="Ex.: falei com a recepcionista, retornar na segunda…"></textarea>
@@ -780,6 +785,7 @@ function desenhaLead(){
   $("#drX").onclick = fechaLead;
   $("#drDelete").onclick = () => apagaLeads([l.id]);
   conectaAgenda(l);
+  conectaComercial(l);
   const wa = $("#drWa");
   if(wa){
     const atual = () => tpls.find(t=>t.id===($("#tplSel")?.value||tplSel)) || tpls[0];
@@ -820,8 +826,8 @@ VIEWS.funil = () => {
       // "Novo": os mais promissores primeiro (nota ponderada pelo nº de avaliações); demais: mais recentes primeiro
       const col = rows.filter(l=>l.status===st).sort((a,b)=> st==="novo" ? (b.nota*Math.log10(b.avaliacoes+1))-(a.nota*Math.log10(a.avaliacoes+1)) : (b.atualizado_em||0)-(a.atualizado_em||0));
       const lim = st==="novo"||st==="descartado" ? 40 : 200;
-      return `<div class="kcol" data-st="${st}"><div class="kcol-h"><span class="dot" style="background:${COR_ST[st]};box-shadow:none"></span>${n}<span class="c num">${fN(col.length)}</span></div>
-        <div class="kcol-b">${col.slice(0,lim).map(l=>`<div class="kc" draggable="true" data-id="${esc(l.id)}"><div class="n">${esc(l.nome)}</div><div class="m">${esc(l.categoria)}${l.bairro?" · "+esc(l.bairro):""}</div>
+      return `<div class="kcol" data-st="${st}"><div class="kcol-h"><span class="dot" style="background:${COR_ST[st]};box-shadow:none"></span>${esc(n)}<span class="c num">${fN(col.length)}</span></div>
+        <div class="kcol-b">${col.slice(0,lim).map(l=>`<div class="kc" draggable="true" data-id="${esc(l.id)}"><div class="n">${esc(l.nome)}</div>${tagsLead(l)}<div class="m">${esc(l.categoria)}${l.bairro?" · "+esc(l.bairro):""}</div>
           <div class="f"><div class="ok-ico"><span class="wa ${l.whatsapp?"on":""}">${ic("wa")}</span><span class="em ${l.email?"on":""}">${ic("mail")}</span><span class="ws ${l.site?"on":""}">${ic("globe")}</span></div>${l.nota?`<span class="xs" style="margin-left:auto"><span class="stars">★</span> ${fNota(l.nota)}</span>`:""}</div></div>`).join("")}
           ${col.length>lim?`<div class="kmore">+ ${fN(col.length-lim)} — use os filtros ou a tela de Leads</div>`:""}
           ${!col.length?`<div class="kmore">Arraste para cá</div>`:""}</div></div>`; }).join("");
@@ -871,7 +877,7 @@ VIEWS.mensagens = async () => {
           </div>
         </div></div>`:""}
       </div>
-      <div class="card" style="margin-top:16px"><div class="card-b"><label class="switch"><input type="checkbox" id="tAuto" ${C.auto_contatado?"checked":""}> Quando eu clicar em WhatsApp, Ligar ou E-mail, mover o lead de “Novo” para “Contatado” automaticamente</label></div></div>`;
+      <div class="card" style="margin-top:16px"><div class="card-b"><label class="switch"><input type="checkbox" id="tAuto" ${C.auto_contatado?"checked":""}> Quando eu registrar um contato realizado, mover o lead de “Novo” para “Contatado” automaticamente</label></div></div>`;
     const prev = () => { $("#tPrev") && ($("#tPrev").innerHTML = esc(preencheTpl($("#tTxt").value, ex)) + `<small>${new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} ✓✓</small>`); };
     prev();
     $$(".tpl-list .it").forEach(it => it.onclick = () => { tplEd = it.dataset.t; draw(); });
@@ -969,6 +975,7 @@ async function tick(){
 }
 </script>
 <script src="/crm.js"></script>
+<script src="/business.js"></script>
 <script src="/gsap.min.js"></script>
 <script src="/effects.js"></script>
 </body>

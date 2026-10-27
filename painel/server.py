@@ -15,6 +15,8 @@ Dados (tudo local, em painel/dados/):
 import csv, hashlib, io, json, os, re, socket, sys, threading, time, unicodedata
 import urllib.error, urllib.parse, urllib.request, uuid, webbrowser
 import sqlite3
+import copy
+import business
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from storage import Store, read_json, write_json
@@ -63,6 +65,7 @@ config = {}
 fila = []            # ids de buscas aguardando
 fila_cond = threading.Condition(lock)
 store = None
+lixeira = {}
 excluidos = {}  # evita que uma busca em andamento recrie um lead excluído
 
 
@@ -74,10 +77,10 @@ def persistir():
     with lock:
         if store:
             try:
-                store.sync({"leads": leads, "buscas": buscas, "config": {"principal": config}, "excluidos": excluidos})
+                store.sync({"leads": leads, "buscas": buscas, "config": {"principal": config}, "excluidos": excluidos, "lixeira": lixeira})
             except (OSError, sqlite3.DatabaseError):
                 # Não deixar uma operação recusada reaparecer na próxima gravação.
-                for target, kind in ((leads, "leads"), (buscas, "buscas"), (excluidos, "excluidos")):
+                for target, kind in ((leads, "leads"), (buscas, "buscas"), (excluidos, "excluidos"), (lixeira, "lixeira")):
                     saved = store.read(kind)
                     for key in list(target):
                         if key not in saved:
@@ -92,7 +95,7 @@ def persistir():
 
 def snapshot():
     return json.loads(json.dumps({"versao": 1, "criado_em": time.time(), "leads": leads,
-                                 "buscas": buscas, "config": config, "excluidos": excluidos}))
+                                 "buscas": buscas, "config": config, "excluidos": excluidos, "lixeira": lixeira}))
 
 def backup(motivo="automatico"):
     with lock:
@@ -120,6 +123,7 @@ def carregar():
     global store
     db_path = os.path.join(DADOS, "prospecta.sqlite3")
     store = Store(db_path)
+    lixeira.clear(); lixeira.update(store.read("lixeira"))
     if store.read("config"):
         leads.update(store.read("leads"))
         buscas.update(store.read("buscas"))
@@ -170,6 +174,7 @@ def excluir_leads(ids, salvar=True):
         if salvar:
             backup("antes-exclusao")
         for lid in ids:
+            lixeira[lid] = {"lead": copy.deepcopy(leads[lid]), "excluido_em": time.time()}
             excluidos[lid] = time.time()
             del leads[lid]
         for b in buscas.values():
@@ -187,8 +192,16 @@ def restaurar(d):
     for key in ("leads", "buscas", "config", "excluidos"):
         if not isinstance(d.get(key), dict):
             raise ValueError("Backup incompleto: " + key)
-    for lid, l in d["leads"].items():
-        if not isinstance(l, dict) or l.get("id") != lid or l.get("status") not in STATUS_LEAD:
+    business.validar_config(d["config"])
+    trash = d.get("lixeira", {})
+    if not isinstance(trash, dict):
+        raise ValueError("Lixeira inválida.")
+    for lid, entry in trash.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("lead"), dict) or entry["lead"].get("id") != lid or lid in d["leads"] or lid not in d["excluidos"]:
+            raise ValueError("Registro da lixeira inválido.")
+        business.timestamp(entry.get("excluido_em"))
+    for lid, l in list(d["leads"].items()) + [(lid, entry["lead"]) for lid, entry in trash.items()]:
+        if not isinstance(l, dict) or l.get("id") != lid or (lid not in trash and l.get("status") not in business.nomes_etapas(sys.modules[__name__], d["config"])):
             raise ValueError("Lead inválido no backup.")
         if not all(k in l for k in (*CAMPOS_CONTATO, "buscas", "historico", "criado_em", "atualizado_em")):
             raise ValueError("Lead incompleto no backup.")
@@ -204,6 +217,7 @@ def restaurar(d):
                 raise ValueError("Valor numérico inválido: " + key)
         if l.get("retorno") is not None and (not isinstance(l["retorno"], (int, float)) or not 0 < l["retorno"] < 32503680000):
             raise ValueError("Data de retorno inválida no backup.")
+        business.validar_comercial(l)
         for ev in l["historico"]:
             if not isinstance(ev, dict) or not isinstance(ev.get("t"), (int, float)) or not 0 <= ev["t"] < 32503680000 or not all(isinstance(ev.get(k), str) for k in ("tipo", "txt")):
                 raise ValueError("Evento inválido no backup.")
@@ -230,11 +244,12 @@ def restaurar(d):
             if b["estado"] in ("rodando", "na_fila"):
                 b.update(estado="cancelada", etapa="Restaurada de backup; repita a busca para continuar.", cancelar=True)
         # Uma única transação substitui todas as coleções.
-        store.sync({"leads": d["leads"], "buscas": d["buscas"], "config": {"principal": d["config"]}, "excluidos": d["excluidos"]})
+        store.sync({"leads": d["leads"], "buscas": d["buscas"], "config": {"principal": d["config"]}, "excluidos": d["excluidos"], "lixeira": trash})
         leads.clear(); leads.update(d["leads"])
         buscas.clear(); buscas.update(d["buscas"])
         config.clear(); config.update(d["config"])
         excluidos.clear(); excluidos.update(d["excluidos"])
+        lixeira.clear(); lixeira.update(trash)
         fila.clear()
 
 
@@ -394,7 +409,7 @@ def mesclar_leads(busca, novos):
             atual = leads.get(lid)
             if atual:
                 for k in CAMPOS_CONTATO:
-                    if n.get(k) not in (None, ""):
+                    if n.get(k) not in (None, "") and k not in atual.get("campos_editados", []) and not (k in ("tel_digitos", "tel_tipo") and "telefone" in atual.get("campos_editados", [])):
                         atual[k] = n[k]
                 if busca["id"] not in atual["buscas"]:
                     atual["buscas"].append(busca["id"])
@@ -675,6 +690,8 @@ def painel_inicio():
 def registrar(l, tipo, txt):
     agora = time.time()
     l.setdefault("historico", []).append({"t": agora, "tipo": tipo, "txt": txt})
+    if tipo == "status":
+        l["historico"][-1]["status"] = l["status"]
     l["atualizado_em"] = agora
     if tipo in ("whatsapp", "ligacao", "email"):
         l["ultimo_contato"] = agora
@@ -714,11 +731,13 @@ class H(BaseHTTPRequestHandler):
         return urllib.parse.urlparse(self.path).path
 
     def do_GET(self):
+        if business.dispatch(self, sys.modules[__name__]):
+            return
         path = self._rota()
         if re.fullmatch(r"/fonts/outfit-(400|500|600|700)\.ttf", path):
             with open(os.path.join(HERE, path[1:]), "rb") as f:
                 return self._envia(200, f.read(), "font/ttf")
-        if path in ("/theme.css", "/crm.js", "/glass.css", "/effects.js", "/gsap.min.js"):
+        if path in ("/theme.css", "/crm.js", "/glass.css", "/effects.js", "/gsap.min.js", "/business.js", "/business.css"):
             with open(os.path.join(HERE, path[1:]), "rb") as f:
                 return self._envia(200, f.read(), "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8")
         if path in ("/", "/index.html"):
@@ -731,7 +750,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/inicio":
             return self._envia(200, painel_inicio())
         if path == "/api/config":
-            return self._envia(200, config)
+            return self._envia(200, config | {"etapas": business.etapas(sys.modules[__name__])})
         if path == "/api/backup":
             with lock:
                 return self._envia(200, snapshot())
@@ -763,6 +782,8 @@ class H(BaseHTTPRequestHandler):
         self._envia(404, {"erro": "não encontrado"})
 
     def do_POST(self):
+        if business.dispatch(self, sys.modules[__name__]):
+            return
         path = self._rota()
         if path == "/api/restaurar":
             d = self._corpo()
@@ -830,7 +851,7 @@ class H(BaseHTTPRequestHandler):
             return self._envia(200, l)
         if path == "/api/leads/lote":
             d = self._corpo()
-            if d.get("status") not in STATUS_LEAD:
+            if d.get("status") not in business.nomes_etapas(sys.modules[__name__]):
                 return self._envia(400, {"erro": "status inválido"})
             n = 0
             with lock:
@@ -838,17 +859,21 @@ class H(BaseHTTPRequestHandler):
                     l = leads.get(lid)
                     if l and l["status"] != d["status"]:
                         l["status"] = d["status"]
-                        registrar(l, "status", f"Status: {NOME_STATUS[d['status']]}")
+                        registrar(l, "status", f"Status: {business.nomes_etapas(sys.modules[__name__])[d['status']]}")
                         n += 1
             salvar_leads()
             return self._envia(200, {"alterados": n})
         self._envia(404, {"erro": "não encontrado"})
 
     def do_PATCH(self):
+        if business.dispatch(self, sys.modules[__name__]):
+            return
         m = re.fullmatch(r"/api/leads/([\w-]+)", self._rota())
         if not m or m.group(1) not in leads:
             return self._envia(404, {"erro": "não encontrado"})
         d, l = self._corpo(), leads[m.group(1)]
+        if "status" in d and d["status"] not in business.nomes_etapas(sys.modules[__name__]):
+            raise ValueError("Etapa inválida.")
         with lock:
             if "retorno" in d:
                 valor = d["retorno"]
@@ -858,9 +883,9 @@ class H(BaseHTTPRequestHandler):
                 registrar(l, "agenda", "Retorno agendado" if valor else "Retorno concluído ou removido")
             if "motivo_perda" in d:
                 l["motivo_perda"] = str(d["motivo_perda"])[:500]
-            if d.get("status") in STATUS_LEAD and d["status"] != l["status"]:
+            if d.get("status") in business.nomes_etapas(sys.modules[__name__]) and d["status"] != l["status"]:
                 l["status"] = d["status"]
-                registrar(l, "status", f"Status: {NOME_STATUS[d['status']]}")
+                registrar(l, "status", f"Status: {business.nomes_etapas(sys.modules[__name__])[d['status']]}")
             if "obs" in d:
                 l["obs"] = str(d["obs"])[:2000]
                 l["atualizado_em"] = time.time()
@@ -868,6 +893,8 @@ class H(BaseHTTPRequestHandler):
         self._envia(200, l)
 
     def do_PUT(self):
+        if business.dispatch(self, sys.modules[__name__]):
+            return
         if self._rota() != "/api/config":
             return self._envia(404, {"erro": "não encontrado"})
         d = self._corpo()
@@ -882,6 +909,8 @@ class H(BaseHTTPRequestHandler):
         self._envia(200, config)
 
     def do_DELETE(self):
+        if business.dispatch(self, sys.modules[__name__]):
+            return
         m = re.fullmatch(r"/api/leads/([\w-]+)", self._rota())
         if m:
             n = excluir_leads([m.group(1)])
