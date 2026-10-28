@@ -18,8 +18,8 @@ function comercialCampos(l){
     ${(l.oportunidades||[]).map(o=>`<div class="crm-item"><div><b>${esc(o.servico)}</b><small>${reais(o.valor_centavos)} · ${esc(OP_ESTADO[o.estado])} · ${dia(o.previsao)}</small></div><div class="row"><button class="btn sm" data-op-edit="${o.id}">Editar</button><button class="btn sm danger" data-item-delete="oportunidades/${o.id}" aria-label="Excluir oportunidade ${esc(o.servico)}">${ic('trash')}</button></div></div>`).join('')}
     <form id="opForm" class="crm-form"><input type="hidden" name="id"><div class="form-grid">${campo('servico','Serviço oferecido','','text','required maxlength="200"')}${campo('valor','Valor (R$)','','number','required min="0" max="999999999.99" step="0.01"')}${campo('previsao','Previsão de fechamento','','date')}<label class="field">Situação<select class="in" name="estado">${Object.entries(OP_ESTADO).map(([v,n])=>`<option value="${v}">${n}</option>`).join('')}</select></label></div><div class="row"><button class="btn pri sm" type="submit">Salvar oportunidade</button><button class="btn sm" type="reset">Nova / limpar</button></div></form>
   </details>
-  <details class="crm-section" open><summary>Tarefas <span>${(l.tarefas||[]).filter(t=>!t.concluida).length} pendentes</span></summary>
-    ${(l.tarefas||[]).slice().sort((a,b)=>a.concluida-b.concluida||a.prazo-b.prazo).map(t=>`<div class="crm-item ${!t.concluida&&t.prazo<Date.now()/1000?'overdue':''}"><div><b>${esc(t.titulo)}</b><small>${t.concluida?'Concluída':t.prazo<Date.now()/1000?'Atrasada':'Pendente'} · ${fData(t.prazo)}</small></div><div class="row"><button class="btn sm" data-task-toggle="${t.id}">${t.concluida?'Reabrir':'Concluir'}</button><button class="btn sm" data-task-edit="${t.id}" aria-label="Editar tarefa ${esc(t.titulo)}">Editar</button><button class="btn sm danger" data-item-delete="tarefas/${t.id}" aria-label="Excluir tarefa ${esc(t.titulo)}">${ic('trash')}</button></div></div>`).join('')}
+  <details class="crm-section" open><summary>Tarefas <span>${(l.tarefas||[]).filter(t=>!t.concluida&&!t.cancelada).length} pendentes</span></summary>
+    ${(l.tarefas||[]).filter(t=>!t.cancelada).slice().sort((a,b)=>a.concluida-b.concluida||a.prazo-b.prazo).map(t=>`<div class="crm-item ${!t.concluida&&t.prazo<Date.now()/1000?'overdue':''}"><div><b>${esc(t.titulo)}</b><small>${t.concluida?'Concluída':t.prazo<Date.now()/1000?'Atrasada':'Pendente'} · ${fData(t.prazo)}</small></div><div class="row"><button class="btn sm" data-task-toggle="${t.id}">${t.concluida?'Reabrir':'Concluir'}</button><button class="btn sm" data-task-edit="${t.id}" aria-label="Editar tarefa ${esc(t.titulo)}">Editar</button><button class="btn sm danger" data-item-delete="tarefas/${t.id}" aria-label="Excluir tarefa ${esc(t.titulo)}">${ic('trash')}</button></div></div>`).join('')}
     <form id="taskForm" class="crm-form"><input type="hidden" name="id"><div class="form-grid">${campo('titulo','Tarefa','','text','required maxlength="200"')}${campo('prazo','Prazo','','datetime-local','required')}</div><div class="row"><button class="btn pri sm" type="submit">Salvar tarefa</button><button class="btn sm" type="reset">Nova / limpar</button></div></form>
   </details>`;
 }
@@ -54,7 +54,7 @@ async function carregarRecomendacao(l){
     target.innerHTML=`<div class="crm-item"><div><b>${offers[r.oferta]}</b><small>${esc(r.situacao)} · Confiança ${esc(r.confianca)}</small></div></div>
       ${r.motivos.length?`<ul>${r.motivos.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}
       ${r.confirmar.length?`<p class="hint">O que confirmar:</p><ul>${r.confirmar.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}
-      <p class="hint">Sugestão por regras, baseada no cadastro e nas respostas abaixo. Não verifica o site nem as conversas automaticamente. “Confirmada” significa informada por você.</p>
+      <p class="hint">Sugestão por regras, baseada no cadastro e nas respostas abaixo. O diagnóstico do site pode ser solicitado abaixo; conversas não são consultadas. “Confirmada” significa informada por você.</p>
       <form id="qualificationForm" class="crm-form"><div class="form-grid">
       ${select('site','Situação do site (verificada por você)',{desconhecido:'Ainda não verifiquei',ausente:'Não possui site próprio',problemas:'Possui problemas verificados',adequado:'Site adequado'})}
       ${select('usa_whatsapp','Atende pelo WhatsApp?',yesno)}
@@ -208,5 +208,3 @@ VIEWS.lixeira=async()=>{
   $$('[data-restore-lead]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/api/lixeira/'+b.dataset.restoreLead+'/restaurar',{method:'POST',body:{}});await Promise.all([carregaLeads(),carregaBuscas()]);render();toast('Lead restaurado');}catch(err){b.disabled=false;mostraErro(err.message);}});
   $$('[data-purge-lead]').forEach(b=>b.onclick=async()=>{if(!await confirmar('Excluir definitivamente','O lead será removido da lixeira. Continuará bloqueado em novas buscas. Backups anteriores ainda poderão recuperá-lo.','Excluir definitivamente'))return;await api('/api/lixeira/'+b.dataset.purgeLead,{method:'DELETE'});render();toast('Lead removido da lixeira');});
 };
-
-iniciarCRM();

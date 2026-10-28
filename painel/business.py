@@ -63,7 +63,7 @@ def tarefa(d, old=None):
     done = d.get('concluida', False)
     if not isinstance(done, bool):
         raise ValueError('Conclusão inválida.')
-    return dict(id=old.get('id', uuid.uuid4().hex), titulo=texto(d.get('titulo'), 200, True),
+    return dict({k: old[k] for k in ('sequencia_id', 'proposta_id', 'cancelada') if k in old}, id=old.get('id', uuid.uuid4().hex), titulo=texto(d.get('titulo'), 200, True),
                 prazo=timestamp(d.get('prazo')), concluida=done,
                 criado_em=old.get('criado_em', time.time()),
                 concluido_em=(old.get('concluido_em') or time.time()) if done else None)
@@ -242,7 +242,16 @@ def recomendar(lead):
             reasons.append('O cadastro não informa site próprio.' if not url else 'O endereço cadastrado leva a rede social, WhatsApp ou página de links.')
             pending.append('Confirmar se a empresa já possui site próprio.')
         else:
-            pending.append('Verificar a qualidade do site; o painel não faz auditoria automática.')
+            audit = lead.get('diagnostico', {})
+            if audit.get('url') == url and audit.get('estado') == 'concluido' and time.time()-audit.get('verificado_em', 0) < 30*86400:
+                broken = any(x.get('estado') == 'quebrado' for x in audit.get('links', []))
+                viewport_missing = any(x.get('id') == 'viewport' and not x.get('encontrado') for x in audit.get('verificacoes', []))
+                if broken or viewport_missing:
+                    site = True
+                    reasons.append('Diagnóstico recente encontrou '+('link interno com HTTP 404/410.' if broken else 'ausência da configuração viewport no HTML inicial.'))
+                    pending.append('Confirmar visualmente os sinais do diagnóstico antes de propor melhorias no site.')
+            else:
+                pending.append('Execute o diagnóstico do site e confirme a qualidade visual no celular.')
     uses = q['usa_whatsapp'] == 'sim' or (q['usa_whatsapp'] == 'desconhecido' and bool(lead.get('whatsapp')))
     needs = [label for field, label in [('repetitivas', 'perguntas repetitivas'), ('agendamentos', 'solicitações de agendamento'), ('perde_contatos', 'perda de contatos por demora ou fora do horário')] if q[field] == 'sim']
     agent = uses and bool(needs)
@@ -492,6 +501,8 @@ def dispatch(h, app):
             lead = app.leads[lid]
             items = copy.deepcopy(lead.get(group, []))
             old = next((x for x in items if x['id'] == item_id), None)
+            if group == 'tarefas' and old and old.get('cancelada') and method == 'PATCH':
+                raise ValueError('Lembrete cancelado. Crie uma tarefa nova se necessário.')
             if item_id and not old:
                 h._envia(404, {'erro': 'Registro não encontrado.'}); return True
             if (method == 'POST' and item_id) or (method != 'POST' and not item_id):

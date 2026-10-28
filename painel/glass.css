@@ -19,7 +19,7 @@ body{background:radial-gradient(ellipse at 70% 0%,#cbdfff 0,transparent 48%),rad
 .hero .btn{background:linear-gradient(160deg,#ffffffef,#ffffff85);border:1px solid #fff;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .hero .btn:hover{background:var(--primary)}
 .liquid-canvas{position:absolute;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
-.hero.has-liquid .orbit{opacity:.25}.hero.has-liquid .orbit-pin{color:#0051b9;filter:drop-shadow(0 3px 2px #ffffffb0)}
+.hero.has-liquid .brazil-art{filter:drop-shadow(8px 14px 18px #1c65a522) saturate(1.04)}
 .t th{background:#f0f5fc}.t tbody tr:hover{background:#eaf3ffbf}
 .motion-ready .fade{animation:none}
 /* Independent translate keeps hover separate from GSAP entrance transforms. */
@@ -33,6 +33,6 @@ body{background:radial-gradient(ellipse at 70% 0%,#cbdfff 0,transparent 48%),rad
 :is(.card,.hero,.kc):focus-within{border-color:#a3caff}
 @media(prefers-reduced-motion:reduce){:is(.card,.hero,.kc):hover{translate:none}:is(.card,.hero,.kc)::after{display:none}}
 @supports not (backdrop-filter:blur(1px)){.topbar,.kpi,.overview-card,.drawer,dialog.confirm-dialog{background:#f6f9ff}}
-@media(max-width:600px){.topbar{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}.hero.has-liquid .orbit{opacity:.15}}
+@media(max-width:600px){.topbar{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}.brazil-art{width:min(44%,210px);right:-4px;bottom:-14px}.hero h2{max-width:68%}.hero p{max-width:59%}}
 @media(prefers-reduced-transparency:reduce){.topbar,.card,.kpi,.overview-card,.drawer,dialog.confirm-dialog{background:#f6f9ff;backdrop-filter:none;-webkit-backdrop-filter:none}.side{background:#071d3b}.btn,.hero .btn{background:#fff}.btn.pri{background:#006bf5}}
 @media(forced-colors:active){.liquid-canvas{display:none}.card,.hero,.btn,.side{border:1px solid CanvasText}}

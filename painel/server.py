@@ -17,6 +17,7 @@ import urllib.error, urllib.parse, urllib.request, uuid, webbrowser
 import sqlite3
 import copy
 import business
+import growth
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from storage import Store, read_json, write_json
@@ -218,6 +219,7 @@ def restaurar(d):
         if l.get("retorno") is not None and (not isinstance(l["retorno"], (int, float)) or not 0 < l["retorno"] < 32503680000):
             raise ValueError("Data de retorno inválida no backup.")
         business.validar_comercial(l)
+        growth.validate(l)
         for ev in l["historico"]:
             if not isinstance(ev, dict) or not isinstance(ev.get("t"), (int, float)) or not 0 <= ev["t"] < 32503680000 or not all(isinstance(ev.get(k), str) for k in ("tipo", "txt")):
                 raise ValueError("Evento inválido no backup.")
@@ -705,6 +707,7 @@ def registrar(l, tipo, txt):
     l["atualizado_em"] = agora
     if tipo in ("whatsapp", "ligacao", "email"):
         l["ultimo_contato"] = agora
+    growth.on_event(l, l['historico'][-1])
 
 def motor_ok():
     try:
@@ -741,13 +744,15 @@ class H(BaseHTTPRequestHandler):
         return urllib.parse.urlparse(self.path).path
 
     def do_GET(self):
+        if growth.dispatch(self, sys.modules[__name__]):
+            return
         if business.dispatch(self, sys.modules[__name__]):
             return
         path = self._rota()
         if re.fullmatch(r"/fonts/outfit-(400|500|600|700)\.ttf", path):
             with open(os.path.join(HERE, path[1:]), "rb") as f:
                 return self._envia(200, f.read(), "font/ttf")
-        if path in ("/theme.css", "/crm.js", "/glass.css", "/effects.js", "/gsap.min.js", "/business.js", "/business.css"):
+        if path in ("/theme.css", "/crm.js", "/glass.css", "/effects.js", "/gsap.min.js", "/business.js", "/business.css", "/growth.js"):
             with open(os.path.join(HERE, path[1:]), "rb") as f:
                 return self._envia(200, f.read(), "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8")
         if path in ("/", "/index.html"):
@@ -792,6 +797,8 @@ class H(BaseHTTPRequestHandler):
         self._envia(404, {"erro": "não encontrado"})
 
     def do_POST(self):
+        if growth.dispatch(self, sys.modules[__name__]):
+            return
         if business.dispatch(self, sys.modules[__name__]):
             return
         path = self._rota()
@@ -852,6 +859,8 @@ class H(BaseHTTPRequestHandler):
             d, l = self._corpo(), leads[m.group(1)]
             with lock:
                 tipo = d.get("tipo") if d.get("tipo") in ("whatsapp", "ligacao", "email", "nota") else "nota"
+                if tipo in growth.CHANNELS and l.get('nao_contatar'):
+                    raise ValueError('Lead marcado para não receber contato.')
                 txt = str(d.get("txt") or "")[:2000]
                 if tipo == "nota" and not txt.strip():
                     return self._envia(400, {"erro": "Escreva a anotação."})
@@ -878,6 +887,8 @@ class H(BaseHTTPRequestHandler):
         self._envia(404, {"erro": "não encontrado"})
 
     def do_PATCH(self):
+        if growth.dispatch(self, sys.modules[__name__]):
+            return
         if business.dispatch(self, sys.modules[__name__]):
             return
         m = re.fullmatch(r"/api/leads/([\w-]+)", self._rota())
